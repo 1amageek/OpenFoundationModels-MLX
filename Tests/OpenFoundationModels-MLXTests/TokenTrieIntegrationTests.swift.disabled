@@ -1,0 +1,590 @@
+import Testing
+@testable import OpenFoundationModelsMLX
+
+@Suite struct TokenTrieIntegrationTests {
+    
+    // MARK: - Integration Test Mocks
+    
+    /// Enhanced mock tokenizer that simulates real tokenizer behavior more closely
+    struct RealisticMockTokenizer: TokenizerAdapter {
+        private let vocab: [String: Int32]
+        private let reverseVocab: [Int32: String]
+        
+        init() {
+            // Create a vocabulary similar to real tokenizers
+            var vocab: [String: Int32] = [:]
+            var reverseVocab: [Int32: String] = [:]
+            var tokenId: Int32 = 1
+            
+            // Common JSON tokens
+            let jsonTokens = ["\"", ":", "{", "}", ",", "[", "]", " ", "\n", "\t"]
+            for token in jsonTokens {
+                vocab[token] = tokenId
+                reverseVocab[tokenId] = token
+                tokenId += 1
+            }
+            
+            // Common word pieces and subwords
+            let commonSubwords = ["name", "age", "email", "user", "id", "data", "type", "value",
+                                "first", "last", "address", "city", "state", "country",
+                                "phone", "website", "company", "title", "description"]
+            
+            for word in commonSubwords {
+                vocab[word] = tokenId
+                reverseVocab[tokenId] = word
+                tokenId += 1
+                
+                // Add some variations
+                vocab[word.uppercased()] = tokenId
+                reverseVocab[tokenId] = word.uppercased()
+                tokenId += 1
+                
+                vocab["_\(word)"] = tokenId
+                reverseVocab[tokenId] = "_\(word)"
+                tokenId += 1
+            }
+            
+            // Single characters for fallback
+            for i in 32...126 { // Printable ASCII
+                let char = String(Character(UnicodeScalar(i)!))
+                if vocab[char] == nil {
+                    vocab[char] = tokenId
+                    reverseVocab[tokenId] = char
+                    tokenId += 1
+                }
+            }
+            
+            self.vocab = vocab
+            self.reverseVocab = reverseVocab
+        }
+        
+        func encode(_ text: String) -> [Int32] {
+            var tokens: [Int32] = []
+            var i = text.startIndex
+            
+            while i < text.endIndex {
+                var found = false
+                
+                // Try to match longest possible substring first
+                for length in (1...min(20, text.distance(from: i, to: text.endIndex))).reversed() {
+                    let endIndex = text.index(i, offsetBy: length, limitedBy: text.endIndex) ?? text.endIndex
+                    let substring = String(text[i..<endIndex])
+                    
+                    if let tokenId = vocab[substring] {
+                        tokens.append(tokenId)
+                        i = endIndex
+                        found = true
+                        break
+                    }
+                }
+                
+                if !found {
+                    // Fallback: encode as single character
+                    let char = String(text[i])
+                    if let tokenId = vocab[char] {
+                        tokens.append(tokenId)
+                    } else {
+                        // Unknown character - use a fallback token ID
+                        tokens.append(999999)
+                    }
+                    i = text.index(after: i)
+                }
+            }
+            
+            return tokens
+        }
+        
+        func decode(_ ids: [Int32]) -> String {
+            return ids.compactMap { reverseVocab[$0] }.joined()
+        }
+        
+        func getVocabSize() -> Int? {
+            return vocab.count
+        }
+    }
+    
+    // MARK: - MLXLLMTokenizer Integration Tests
+    
+    @Suite struct MLXLLMTokenizerIntegrationTests {
+        
+        @Test func tokenTrieWithSpecialTokens() {
+            let tokenizer = RealisticMockTokenizer()
+            var trie = TokenTrie()
+            
+            // Insert JSON keys that require special token handling
+            let jsonKeys = ["\"name\"", "\"age\"", "\"email\""]
+            
+            for key in jsonKeys {
+                let tokens = tokenizer.encode(key)
+                trie.insert(tokenIDs: tokens, keyName: key)
+            }
+            
+            #expect(trie.allKeys.count == 3)
+            
+            // Test that we can navigate through special tokens
+            let nameTokens = tokenizer.encode("\"name\"")
+            #expect(trie.node(for: nameTokens)?.terminal == true)
+            #expect(trie.node(for: nameTokens)?.keyName == "\"name\"")
+            
+            // Test path traversal with special tokens
+            var path = TokenTrie.Path(root: trie.root)
+            for token in nameTokens {
+                #expect(path.append(token, in: trie) == true)
+            }
+            #expect(path.isAtTerminal())
+            #expect(path.getKeyName() == "\"name\"")
+        }
+        
+        @Test func tokenTrieWithComplexTokenization() {
+            let tokenizer = RealisticMockTokenizer()
+            var trie = TokenTrie()
+            
+            // Keys that might be tokenized in complex ways
+            let complexKeys = ["firstName", "user_name", "EMAIL_ADDRESS", "phone-number"]
+            
+            for key in complexKeys {
+                let tokens = tokenizer.encode(key)
+                trie.insert(tokenIDs: tokens, keyName: key)
+                
+                // Verify round-trip encoding/decoding
+                let decoded = tokenizer.decode(tokens)
+                #expect(decoded == key, "Token round-trip failed: '\(key)' -> '\(decoded)'")
+            }
+            
+            #expect(trie.allKeys == Set(complexKeys))
+            
+            // Test lookup for each complex key
+            for key in complexKeys {
+                let tokens = tokenizer.encode(key)
+                #expect(trie.node(for: tokens)?.terminal == true)
+                #expect(trie.node(for: tokens)?.keyName == key)
+            }
+        }
+        
+        @Test func compatibilityWithCachedTokenizer() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Simulate caching behavior from MLXLLMTokenizer
+            let schema1 = SchemaMeta(keys: ["name", "age"], required: ["name"])
+            let schema2 = SchemaMeta(keys: ["name", "age"], required: ["name"]) // Same content
+            let schema3 = SchemaMeta(keys: ["email", "phone"], required: [])    // Different content
+            
+            let trie1 = TokenTrieBuilder.buildCached(schema: schema1, tokenizer: tokenizer)
+            let trie2 = TokenTrieBuilder.buildCached(schema: schema2, tokenizer: tokenizer)
+            let trie3 = TokenTrieBuilder.buildCached(schema: schema3, tokenizer: tokenizer)
+            
+            // Same schemas should produce equivalent tries
+            #expect(trie1.allKeys == trie2.allKeys)
+            
+            // Different schemas should produce different tries
+            #expect(trie1.allKeys != trie3.allKeys)
+            
+            // Verify functionality
+            for key in ["name", "age"] {
+                let tokens = tokenizer.encode(key)
+                #expect(trie1.node(for: tokens)?.terminal == true)
+                #expect(trie2.node(for: tokens)?.terminal == true)
+            }
+        }
+    }
+    
+    // MARK: - ConstrainedSampler Integration Tests
+    
+    @Suite struct ConstrainedSamplerIntegrationTests {
+        
+        @Test func tokenTrieConstraintsWithSampler() {
+            let tokenizer = RealisticMockTokenizer()
+            let schema = SchemaMeta(keys: ["name", "age", "city"], required: ["name"])
+            let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+            
+            // Create sampler with trie constraints
+            let constrainedSampler = ConstrainedSampler(
+                tokenTrie: trie,
+                specialTokens: nil,
+                keyTrie: nil
+            )
+            
+            #expect(constrainedSampler != nil)
+            
+            // Test allowed tokens at root should include first tokens of all keys
+            let rootPath = TokenTrie.Path(root: trie.root)
+            let allowedAtRoot = trie.getAllowedTokens(for: rootPath)
+            
+            // Should contain first tokens of "name", "age", "city"
+            #expect(!allowedAtRoot.isEmpty)
+            
+            // Verify each key can be fully traversed
+            for key in schema.keys {
+                let tokens = tokenizer.encode(key)
+                var path = TokenTrie.Path(root: trie.root)
+                
+                for token in tokens {
+                    let allowed = trie.getAllowedTokens(for: path)
+                    #expect(allowed.contains(token), "Token \(token) not allowed for key '\(key)' at path \(path.tokens)")
+                    #expect(path.append(token, in: trie))
+                }
+                
+                #expect(trie.canComplete(from: path), "Cannot complete key '\(key)'")
+            }
+        }
+        
+        @Test func tokenTrieWithLogitMasking() {
+            let tokenizer = RealisticMockTokenizer()
+            let vocabSize = tokenizer.getVocabSize() ?? 1000
+            
+            // Create small trie for testing
+            let keys = ["test", "name"]
+            let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
+            
+            // Simulate logit masking behavior
+            let rootPath = TokenTrie.Path(root: trie.root)
+            let allowedTokens = trie.getAllowedTokens(for: rootPath)
+            
+            // Create mock logits array
+            var logits = Array(repeating: 1.0, count: vocabSize)
+            
+            // Mask disallowed tokens
+            for i in 0..<vocabSize {
+                let tokenId = Int32(i)
+                if !allowedTokens.contains(tokenId) {
+                    logits[i] = -Float.infinity
+                }
+            }
+            
+            // Verify masking worked
+            for (index, logit) in logits.enumerated() {
+                let tokenId = Int32(index)
+                if allowedTokens.contains(tokenId) {
+                    #expect(logit == 1.0, "Allowed token \(tokenId) was masked")
+                } else {
+                    #expect(logit == -Float.infinity, "Disallowed token \(tokenId) was not masked")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Schema Integration Tests
+    
+    @Suite struct SchemaIntegrationTests {
+        
+        @Test func tokenTrieFromSchemaMeta() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Create schema with various key types
+            let schema = SchemaMeta(
+                keys: ["id", "firstName", "lastName", "email", "age", "isActive"],
+                required: ["id", "firstName", "email"]
+            )
+            
+            let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+            
+            #expect(trie.allKeys == Set(schema.keys))
+            
+            // Verify all keys can be found
+            for key in schema.keys {
+                let tokens = tokenizer.encode(key)
+                let node = trie.node(for: tokens)
+                #expect(node?.terminal == true, "Key '\(key)' not found as terminal")
+                #expect(node?.keyName == key, "Key name mismatch for '\(key)'")
+            }
+            
+            // Test constraint generation - all required keys should be accessible
+            for requiredKey in schema.required {
+                #expect(trie.allKeys.contains(requiredKey), "Required key '\(requiredKey)' missing from trie")
+                
+                let tokens = tokenizer.encode(requiredKey)
+                var path = TokenTrie.Path(root: trie.root)
+                
+                // Should be able to traverse to required key
+                for token in tokens {
+                    #expect(path.append(token, in: trie), "Cannot traverse to required key '\(requiredKey)'")
+                }
+                #expect(path.isAtTerminal(), "Required key '\(requiredKey)' path is not terminal")
+            }
+        }
+        
+        @Test func nestedSchemaTokenTrieIntegration() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Simulate nested object keys
+            let nestedKeys = [
+                "user", "user.name", "user.email", "user.profile",
+                "user.profile.firstName", "user.profile.lastName",
+                "address", "address.street", "address.city", "address.country"
+            ]
+            
+            let schema = SchemaMeta(keys: nestedKeys, required: ["user", "address"])
+            let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+            
+            #expect(trie.allKeys.count == nestedKeys.count)
+            
+            // Test that nested structure is properly represented
+            for key in nestedKeys {
+                let tokens = tokenizer.encode(key)
+                #expect(trie.node(for: tokens)?.terminal == true, "Nested key '\(key)' not terminal")
+            }
+            
+            // Test prefix relationships
+            let userTokens = tokenizer.encode("user")
+            let userNode = trie.node(for: userTokens)
+            #expect(userNode?.terminal == true, "Base 'user' key should be terminal")
+            
+            // Should be able to continue from "user" to nested properties
+            var userPath = TokenTrie.Path(root: trie.root)
+            for token in userTokens {
+                #expect(userPath.append(token, in: trie))
+            }
+            
+            let allowedAfterUser = trie.getAllowedTokens(for: userPath)
+            #expect(!allowedAfterUser.isEmpty, "Should have allowed tokens after 'user' for nested keys")
+        }
+        
+        @Test func schemaEvolutionCompatibility() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Simulate schema evolution - adding new keys over time
+            let v1Keys = ["id", "name", "email"]
+            let v2Keys = v1Keys + ["age", "phone"] // Added fields
+            let v3Keys = v2Keys + ["address", "city", "country"] // More fields
+            
+            let trie1 = TokenTrieBuilder.build(keys: v1Keys, tokenizer: tokenizer)
+            let trie2 = TokenTrieBuilder.build(keys: v2Keys, tokenizer: tokenizer)
+            let trie3 = TokenTrieBuilder.build(keys: v3Keys, tokenizer: tokenizer)
+            
+            // Earlier version keys should work in later versions
+            for key in v1Keys {
+                let tokens = tokenizer.encode(key)
+                
+                #expect(trie1.node(for: tokens)?.terminal == true)
+                #expect(trie2.node(for: tokens)?.terminal == true)
+                #expect(trie3.node(for: tokens)?.terminal == true)
+            }
+            
+            // Version 2 keys should work in version 3
+            for key in v2Keys {
+                let tokens = tokenizer.encode(key)
+                #expect(trie3.node(for: tokens)?.terminal == true)
+            }
+            
+            // Ensure proper size progression
+            #expect(trie1.allKeys.count == v1Keys.count)
+            #expect(trie2.allKeys.count == v2Keys.count)
+            #expect(trie3.allKeys.count == v3Keys.count)
+        }
+    }
+    
+    // MARK: - Real-world Integration Tests
+    
+    @Suite struct RealWorldIntegrationTests {
+        
+        @Test func jsonResponseConstrainedGeneration() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Simulate API response schema
+            let apiResponseKeys = [
+                "status", "message", "data", "timestamp",
+                "user", "user_id", "username", "email",
+                "items", "item_count", "page", "total_pages"
+            ]
+            
+            let schema = SchemaMeta(keys: apiResponseKeys, required: ["status", "data"])
+            let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+            
+            // Simulate step-by-step JSON generation
+            let jsonStart = "{"
+            let jsonStartTokens = tokenizer.encode(jsonStart)
+            
+            // After opening brace, should allow keys
+            var path = TokenTrie.Path()
+            for token in jsonStartTokens {
+                // This simulates external JSON parsing logic, not TokenTrie responsibility
+                // TokenTrie focuses on key constraints
+            }
+            
+            // Test each API response key can be generated
+            for key in apiResponseKeys {
+                let keyTokens = tokenizer.encode(key)
+                var keyPath = TokenTrie.Path(root: trie.root)
+                
+                for token in keyTokens {
+                    #expect(keyPath.append(token, in: trie), "Cannot generate key '\(key)'")
+                }
+                #expect(keyPath.isAtTerminal(), "Key '\(key)' is not complete")
+            }
+        }
+        
+        @Test func userProfileSchemaIntegration() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Real-world user profile schema
+            let profileKeys = [
+                "id", "username", "email", "firstName", "lastName",
+                "dateOfBirth", "phoneNumber", "address", "city", "state", "zipCode",
+                "preferences", "settings", "lastLogin", "createdAt", "updatedAt",
+                "isActive", "roles", "permissions"
+            ]
+            
+            let schema = SchemaMeta(
+                keys: profileKeys,
+                required: ["id", "username", "email", "firstName", "lastName"]
+            )
+            
+            let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+            
+            // Test constraint enforcement - all keys should be valid
+            #expect(trie.allKeys == Set(profileKeys))
+            
+            // Test required vs optional key handling
+            for requiredKey in schema.required {
+                let tokens = tokenizer.encode(requiredKey)
+                #expect(trie.node(for: tokens)?.terminal == true)
+            }
+            
+            // Test that trie supports realistic token generation workflow
+            var generationPaths: [TokenTrie.Path] = []
+            
+            for key in profileKeys.prefix(5) { // Test subset for performance
+                var path = TokenTrie.Path(root: trie.root)
+                let tokens = tokenizer.encode(key)
+                
+                for token in tokens {
+                    let allowedTokens = trie.getAllowedTokens(for: path)
+                    #expect(allowedTokens.contains(token), "Token \(token) not allowed for key '\(key)'")
+                    #expect(path.append(token, in: trie))
+                }
+                
+                generationPaths.append(path)
+            }
+            
+            // All paths should reach terminal states
+            for (index, path) in generationPaths.enumerated() {
+                #expect(path.isAtTerminal(), "Path \(index) did not reach terminal state")
+            }
+        }
+        
+        @Test func multiSchemaTokenTrieReuse() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Test that TokenTrie can handle multiple different schemas efficiently
+            let userSchema = SchemaMeta(keys: ["id", "name", "email"], required: ["id"])
+            let productSchema = SchemaMeta(keys: ["sku", "title", "price", "category"], required: ["sku"])
+            let orderSchema = SchemaMeta(keys: ["orderId", "userId", "items", "total", "status"], required: ["orderId"])
+            
+            let userTrie = TokenTrieBuilder.buildCached(schema: userSchema, tokenizer: tokenizer)
+            let productTrie = TokenTrieBuilder.buildCached(schema: productSchema, tokenizer: tokenizer)
+            let orderTrie = TokenTrieBuilder.buildCached(schema: orderSchema, tokenizer: tokenizer)
+            
+            // Each trie should contain only its own keys
+            #expect(userTrie.allKeys == Set(userSchema.keys))
+            #expect(productTrie.allKeys == Set(productSchema.keys))
+            #expect(orderTrie.allKeys == Set(orderSchema.keys))
+            
+            // No cross-contamination between schemas
+            #expect(userTrie.allKeys.isDisjoint(with: productTrie.allKeys))
+            #expect(productTrie.allKeys.isDisjoint(with: orderTrie.allKeys))
+            #expect(orderTrie.allKeys.isDisjoint(with: userTrie.allKeys))
+            
+            // Each trie should function independently
+            for schema in [(userSchema, userTrie), (productSchema, productTrie), (orderSchema, orderTrie)] {
+                for key in schema.0.keys {
+                    let tokens = tokenizer.encode(key)
+                    #expect(schema.1.node(for: tokens)?.terminal == true, "Key '\(key)' not found in its schema trie")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Error Handling Integration Tests
+    
+    @Suite struct ErrorHandlingIntegrationTests {
+        
+        @Test func handlesTokenizerFailures() {
+            struct FailingTokenizer: TokenizerAdapter {
+                func encode(_ text: String) -> [Int32] {
+                    if text.contains("fail") {
+                        return [] // Simulate encoding failure
+                    }
+                    return [1, 2, 3]
+                }
+                
+                func decode(_ ids: [Int32]) -> String {
+                    return "decoded"
+                }
+                
+                func getVocabSize() -> Int? {
+                    return nil // Simulate unknown vocab size
+                }
+            }
+            
+            let failingTokenizer = FailingTokenizer()
+            let keys = ["normal", "fail_key", "another_normal"]
+            
+            let trie = TokenTrieBuilder.build(keys: keys, tokenizer: failingTokenizer)
+            
+            // Should handle partial failures gracefully
+            // Keys that fail to encode should be skipped, others should work
+            #expect(trie.allKeys.contains("normal"))
+            #expect(trie.allKeys.contains("another_normal"))
+            #expect(!trie.allKeys.contains("fail_key")) // Should be missing due to empty encoding
+        }
+        
+        @Test func handlesInconsistentTokenization() {
+            final class InconsistentTokenizer: TokenizerAdapter {
+                var callCount = 0
+                
+                func encode(_ text: String) -> [Int32] {
+                    callCount += 1
+                    // Return different results for same input (simulating non-deterministic tokenizer)
+                    return [Int32(text.count), Int32(callCount)]
+                }
+                
+                func decode(_ ids: [Int32]) -> String {
+                    return ids.map(String.init).joined(separator: "_")
+                }
+                
+                func getVocabSize() -> Int? {
+                    return 1000
+                }
+            }
+            
+            let inconsistentTokenizer = InconsistentTokenizer()
+            
+            // Build trie with inconsistent tokenizer
+            let keys = ["test1", "test2"]
+            let trie = TokenTrieBuilder.build(keys: keys, tokenizer: inconsistentTokenizer)
+            
+            // Should still create a functional trie
+            #expect(trie.allKeys.count == keys.count)
+            
+            // Each key should have been encoded once during build
+            for key in keys {
+                #expect(trie.allKeys.contains(key))
+            }
+        }
+        
+        @Test func handlesMemoryPressure() {
+            let tokenizer = RealisticMockTokenizer()
+            
+            // Create many large tries to simulate memory pressure
+            var tries: [TokenTrie] = []
+            
+            for batch in 1...10 {
+                let keys = (1...100).map { "batch_\(batch)_key_\($0)_with_extra_content_to_increase_memory_usage" }
+                let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
+                
+                #expect(trie.allKeys.count == 100)
+                tries.append(trie)
+            }
+            
+            // All tries should remain functional
+            for (batchIndex, trie) in tries.enumerated() {
+                let sampleKey = "batch_\(batchIndex + 1)_key_50_with_extra_content_to_increase_memory_usage"
+                let tokens = tokenizer.encode(sampleKey)
+                #expect(trie.node(for: tokens)?.terminal == true)
+            }
+            
+            // Cleanup is handled by ARC
+            tries.removeAll()
+        }
+    }
+}

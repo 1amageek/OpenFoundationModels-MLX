@@ -1,0 +1,153 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Xcode
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.xcuserstate
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.xcworkspace
+!default.xcworkspace
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+timeline.json
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.pins
+*.xcodeproj
+.swiftpm/config/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.swiftpm/xcode/package.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+Package.resolved.orig
+
+# SPM - Resolve conflicts
+Package.resolved.BASE.*
+Package.resolved.LOCAL.*
+Package.resolved.REMOTE.*
+
+# VS Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# MLX/ML specific
+*.ckpt
+*.safetensors
+*.bin
+*.pth
+*.pt
+*.h5
+*.hdf5
+*.npz
+*.npy
+checkpoints/
+models/
+weights/
+*.model
+*.mlmodel
+*.mlmodelc
+*.mlpackage
+
+# Python (if using any Python scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.coverage
+coverage/
+*.lcov
+*.profraw
+*.profdata
+
+# Logs and databases
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+.netrc
+*.pem
+*.key
+*.crt
+*.p12
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.cache/
+tmp/
+temp/
+
+# Documentation build
+docs/_build/
+docs/.build/
+*.generated.md
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Archive files  
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Claude artifacts
+.claude/
