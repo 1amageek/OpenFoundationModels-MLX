@@ -231,13 +231,12 @@ struct MLXLLMTokenizerTests {
         let mockTokenizer = MockTokenizer()
         let tokenizer = MLXLLMTokenizer(tokenizer: mockTokenizer)
         
-        let fingerprint = tokenizer.getFingerprint()
+        let fingerprint = tokenizer.fingerprint()
         
         #expect(!fingerprint.isEmpty)
-        #expect(fingerprint.contains("eos=2"))
-        #expect(fingerprint.contains("unk=1"))
-        #expect(fingerprint.contains("quote=[34]"))
-        #expect(fingerprint.contains("colon=[58]"))
+        #expect(fingerprint.contains("mlx-tokenizer"))
+        #expect(fingerprint.contains("-e2"))  // eos=2
+        #expect(fingerprint.contains("-b0"))  // bos=0
     }
     
     @Test("Caches fingerprint")
@@ -245,8 +244,8 @@ struct MLXLLMTokenizerTests {
         let mockTokenizer = MockTokenizer()
         let tokenizer = MLXLLMTokenizer(tokenizer: mockTokenizer)
         
-        let fp1 = tokenizer.getFingerprint()
-        let fp2 = tokenizer.getFingerprint()
+        let fp1 = tokenizer.fingerprint()
+        let fp2 = tokenizer.fingerprint()
         
         #expect(fp1 == fp2)  // Should return cached value
     }
@@ -261,8 +260,8 @@ struct MLXLLMTokenizerTests {
         mockTokenizer2.eosTokenId = 5  // Different EOS
         let tokenizer2 = MLXLLMTokenizer(tokenizer: mockTokenizer2)
         
-        let fp1 = tokenizer1.getFingerprint()
-        let fp2 = tokenizer2.getFingerprint()
+        let fp1 = tokenizer1.fingerprint()
+        let fp2 = tokenizer2.fingerprint()
         
         #expect(fp1 != fp2)  // Different fingerprints
     }

@@ -78,7 +78,8 @@ public enum JSONGenerationError: Error, LocalizedError {
 // Note: We can't make LogitProcessor methods throw, so we track errors internally
 
 /// TokenTrieベースの制約をLogitProcessorとして実装
-/// JSON生成時にスキーマに定義されたキーのみを物理的に許可する
+/// JSON生成時にスキーマに定義されたキーを原則ハードマスクし、
+/// 値や一部フェーズはソフトヒント（バイアス）で誘導する
 /// 最適化版: 原子操作 + 最小ロック + GPU並列化
 public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     
@@ -168,45 +169,86 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     // MARK: - 最適化されたメイン処理
     
     private func processOptimized(logits: MLXArray) throws -> MLXArray {
-        // 1. 状態スナップショット取得（高速読み取り）
-        let currentSnapshot = lightweightState.withLock { $0 }
-        
-        // 2. 生成状態更新（高速書き込み）
-        let updatedSnapshot = ProcessorSnapshot(
-            jsonPhase: currentSnapshot.jsonPhase,
-            tokenPath: currentSnapshot.tokenPath,
-            isGenerating: true,
-            tokenCount: currentSnapshot.tokenCount
-        )
-        lightweightState.withLock { $0 = updatedSnapshot }
-        
-        // 3. キー状態判定（ロック不要）
-        let isInKey = isInKeyState(phase: currentSnapshot.jsonPhase)
-        guard isInKey else {
-            return logits  // 制約なし、即座にリターン
-        }
-        
-        // 4. 許可トークン計算（ロック不要、読み取り専用）
-        let allowedTokens = tokenTrie.getAllowedTokens(for: currentSnapshot.tokenPath)
-        
-        // 5. 制約検証（ロック不要）
-        if allowedTokens.isEmpty && !currentSnapshot.tokenPath.isAtTerminal() {
-            throw JSONGenerationError.noValidTokens(
-                partialKey: tokenizerAdapter.decode(currentSnapshot.tokenPath.tokens),
-                position: currentSnapshot.tokenPath.tokens.count
+        // 1) スナップショット & JSON 状態取得
+        let snap = lightweightState.withLock { $0 }
+        let jsonState = heavyState.withLock { $0.jsonStateMachine }
+        let isInKey = isInKeyState(phase: snap.jsonPhase)
+
+        // 2) 生成状態フラグだけ更新
+        lightweightState.withLock {
+            $0 = ProcessorSnapshot(
+                jsonPhase: snap.jsonPhase,
+                tokenPath: snap.tokenPath,
+                isGenerating: true,
+                tokenCount: snap.tokenCount
             )
         }
-        
-        // 6. 有効トークン準備（ロック不要）
-        var validTokens = allowedTokens
-        if currentSnapshot.tokenPath.isAtTerminal() {
-            if let quoteToken = specialTokens.quoteTokens.first {
-                validTokens.insert(quoteToken)
+
+        // 3) 構文ヒントを取得（Trie/Path を渡す）
+        let hint = maskHintGenerator.maskHint(
+            for: jsonState,
+            tokenTrie: tokenTrie,
+            tokenPath: snap.tokenPath
+        )
+
+        // 4) 許可集合の構築
+        var allowed = Set<Int32>()
+        var useHardMask = false
+
+        if isInKey {
+            // キー中: Trie の許可集合
+            allowed = tokenTrie.getAllowedTokens(for: snap.tokenPath)
+
+            // 末端ならクォート（単体がなければ動的候補）とエスケープを許可
+            if snap.tokenPath.isAtTerminal() {
+                allowed.formUnion(dynamicQuoteCandidates(from: logits, fallback: specialTokens.quoteTokens))
+                allowed.formUnion(specialTokens.backslashTokens)
+            }
+
+            // 構文側が hard の場合は交差させて安全側に寄せる
+            if let h = hint, h.mode == .hard {
+                useHardMask = true
+                if !h.allow.isEmpty {
+                    allowed.formIntersection(h.allow)
+                }
+            }
+
+            // 途中で継続不能なら即エラー
+            if allowed.isEmpty && !snap.tokenPath.isAtTerminal() {
+                throw JSONGenerationError.noValidTokens(
+                    partialKey: tokenizerAdapter.decode(snap.tokenPath.tokens),
+                    position: snap.tokenPath.tokens.count
+                )
+            }
+        } else {
+            // キー外: 構文ヒントに従う（hard は物理マスク、soft は後段でバイアス）
+            if let h = hint {
+                switch h.mode {
+                case .hard:
+                    allowed = h.allow
+                    useHardMask = true
+                case .soft:
+                    // allowed は空のまま（素通し）→ prefer を後でバイアス
+                    break
+                }
             }
         }
-        
-        // 7. GPU処理（完全にロック外、最大並列性）
-        return try applyHardMaskOptimized(to: logits, allowedTokens: validTokens)
+
+        // 5) マスク適用
+        if useHardMask && !allowed.isEmpty {
+            return try applyHardMaskOptimized(to: logits, allowedTokens: allowed)
+        }
+        if let h = hint, h.mode == .soft, !h.prefer.isEmpty {
+            // ソフトヒントはバイアスのみ
+            return MLXUtils.applySoftBias(logits: logits, preferredTokens: h.prefer, bias: 2.5)
+        }
+        if isInKey && !allowed.isEmpty {
+            // キー中は常にハードマスク
+            return try applyHardMaskOptimized(to: logits, allowedTokens: allowed)
+        }
+
+        // 数値/リテラルなど制約不能な場面は素通し
+        return logits
     }
     
     public func process(logits: MLXArray) -> MLXArray {
@@ -340,38 +382,63 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     
     /// GPU最適化されたマスク適用（完全にロック外）
     private func applyHardMaskOptimized(to logits: MLXArray, allowedTokens: Set<Int32>) throws -> MLXArray {
-        guard !allowedTokens.isEmpty else {
-            throw JSONGenerationError.emptyConstraints
-        }
-        
-        let actualVocabSize = logits.dim(logits.ndim - 1)
-        
-        // EOS許可判定（読み取り専用）
-        let currentSnapshot = lightweightState.withLock { $0 }
+        let vocab = logits.dim(logits.ndim - 1)
+        let snap = lightweightState.withLock { $0 }
+
+        // EOS は「完了後」だけ許可（途中では許可しない）
         var allow = allowedTokens
-        if !isInKeyState(phase: currentSnapshot.jsonPhase), 
-           let eos = tokenizerAdapter.eosTokenId() {
+        if case .done = snap.jsonPhase, let eos = tokenizerAdapter.eosTokenId() {
             allow.insert(eos)
         }
-        
-        // GPU処理（並列実行）
-        let allowedIndices = Array(allow.filter { $0 >= 0 && $0 < actualVocabSize })
-        
-        var mask = [Float](repeating: 0, count: actualVocabSize)
-        for idx in allowedIndices {
-            mask[Int(idx)] = 1
+
+        // 許可が空でも .done + EOS 無しなどの特殊状況があり得るので投げない
+        let indices = Array(allow.filter { $0 >= 0 && $0 < vocab })
+
+        if indices.isEmpty {
+            // 物理マスク不能：そのまま返すよりも少し鈍らせる（尻尾抑止）
+            return logits * 0.9
         }
+
+        var mask = [Float](repeating: 0, count: vocab)
+        for i in indices { mask[Int(i)] = 1 }
         let maskArray = MLXArray(mask)
-        
         var shape = Array(repeating: 1, count: logits.ndim)
-        shape[logits.ndim - 1] = actualVocabSize
-        let reshapedMask = maskArray.reshaped(shape)
-        
+        shape[logits.ndim - 1] = vocab
+        let reshaped = maskArray.reshaped(shape)
         let negInf = MLX.full(logits.shape, values: -Float.infinity)
-        return MLX.where(reshapedMask .> 0, logits, negInf)
+        return MLX.where(reshaped .> 0, logits, negInf)
     }
     
     // Removed: applySoftBias - only hard constraints now
+    // ↑ 上の processOptimized で soft ヒント時のみ Util のバイアスを使用
+
+    // MARK: - Quote 終端の動的許可（単体 `"` が無いトークナイザ対策）
+    private func dynamicQuoteCandidates(from logits: MLXArray, topK: Int = 256, fallback: Set<Int32>) -> Set<Int32> {
+        // 単体 quote が既に検出できていればそれを使う
+        if !fallback.isEmpty { return fallback }
+        var out = Set<Int32>()
+        for i in topKIndices(logits, k: topK) {
+            let tid = Int32(i)
+            let piece = tokenizerAdapter.decodeToken(tid)
+            if piece.contains("\"") { out.insert(tid) }
+        }
+        // エスケープは常に許可（\" など）
+        out.formUnion(specialTokens.backslashTokens)
+        return out
+    }
+
+    private func topKIndices(_ logits: MLXArray, k: Int) -> [Int] {
+        // 末端時のみ呼ばれる想定なので単純 CPU 実装で十分
+        let flat = logits.reshaped([-1])
+        let n = flat.dim(0)
+        var arr: [(Float, Int)] = []
+        arr.reserveCapacity(n)
+        for i in 0..<n {
+            arr.append((flat[i].item(Float.self), i))
+        }
+        arr.sort { $0.0 > $1.0 }
+        return arr.prefix(k).map { $0.1 }
+    }
     
     // MARK: - Debugging
     
@@ -416,7 +483,7 @@ extension TokenTrieLogitProcessor {
     
     public func validateGenerated() -> Bool {
         return heavyState.withLock { state in
-            let text = tokenizer.decode(tokens: state.generatedTokens.map { Int($0) }, skipSpecialTokens: false)
+            let text = tokenizerAdapter.decode(state.generatedTokens)
             
             guard let data = text.data(using: String.Encoding.utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {

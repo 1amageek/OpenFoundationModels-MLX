@@ -142,7 +142,7 @@ public final class MLXLLMTokenizer: TokenizerAdapter, @unchecked Sendable {
                special.backslashTokens.contains(tokenID)
     }
     
-    public func getFingerprint() -> String {
+    public func fingerprint() -> String {
         // Generate a fingerprint based on tokenizer properties
         var fingerprint = "mlx-tokenizer"
         if let vocabSize = getVocabSize() {

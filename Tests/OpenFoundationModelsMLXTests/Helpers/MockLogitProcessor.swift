@@ -35,6 +35,10 @@ final class MockLogitProcessor: ErrorCheckable, @unchecked Sendable {
             shouldTriggerFatalError = true
         }
         
+        // Process the logits before setting error state
+        // This ensures the error is available for the next check
+        let result = logits
+        
         // Set error state based on test configuration
         if shouldTriggerFatalError {
             mockError = mockError ?? .noValidTokens(partialKey: "test", position: currentTokenCount)
@@ -44,7 +48,7 @@ final class MockLogitProcessor: ErrorCheckable, @unchecked Sendable {
             lastError = mockError
         }
         
-        return logits
+        return result
     }
     
     func didSample(token: MLXArray) {
@@ -154,6 +158,12 @@ final class MockTokenizer: TokenizerAdapter {
     
     func unknownTokenId() -> Int32? {
         return 0
+    }
+    
+    func fingerprint() -> String {
+        // MockTokenizer用の固有識別子
+        // テスト間の独立性を保証
+        return "MockTokenizer-v1.0-vocab\(getVocabSize() ?? 0)"
     }
 }
 

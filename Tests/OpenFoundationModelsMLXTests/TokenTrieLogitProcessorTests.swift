@@ -324,6 +324,7 @@ struct TokenTrieLogitProcessorTests {
         // Test fatal error
         processor.shouldTriggerFatalError = true
         processor.mockError = .noValidTokens(partialKey: "test", position: 1)
+        _ = processor.process(logits: MLX.zeros([1, 100]))  // Trigger error state
         #expect(processor.hasFatalError())
         #expect(processor.hasError())
         
@@ -331,6 +332,7 @@ struct TokenTrieLogitProcessorTests {
         processor.clearError()
         processor.shouldTriggerNonFatalError = true
         processor.mockError = .emptyConstraints
+        _ = processor.process(logits: MLX.zeros([1, 100]))  // Trigger error state
         #expect(!processor.hasFatalError())
         #expect(processor.hasError())
     }
@@ -342,6 +344,7 @@ struct TokenTrieLogitProcessorTests {
         // Test noValidTokens (fatal)
         processor.mockError = .noValidTokens(partialKey: "test", position: 5)
         processor.shouldTriggerFatalError = true
+        _ = processor.process(logits: MLX.zeros([1, 100]))  // Trigger error state
         #expect(processor.hasFatalError())
         
         // Test invalidTokenSelected (fatal)
@@ -352,6 +355,7 @@ struct TokenTrieLogitProcessorTests {
             expectedTokens: Set([456, 789])
         )
         processor.shouldTriggerFatalError = true
+        _ = processor.process(logits: MLX.zeros([1, 100]))  // Trigger error state
         #expect(processor.hasFatalError())
         
         // Test emptyConstraints (non-fatal)

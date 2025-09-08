@@ -185,10 +185,22 @@ public protocol TokenizerAdapter: Sendable {
     func encode(_ text: String) -> [Int32]
     func decode(_ ids: [Int32]) -> String
     func getVocabSize() -> Int?
+    
+    /// Generate a unique identifier for this tokenizer
+    /// Used for cache key generation to prevent cross-model contamination
+    func fingerprint() -> String
 }
 
 // TokenTrie builder
 public enum TokenTrieBuilder {
+    // Thread-safe cache: NSCache is thread-safe, but we use Mutex for atomic get/set operations
+    private final class TokenTrieBox: NSObject { 
+        let value: TokenTrie
+        init(_ v: TokenTrie) { self.value = v } 
+    }
+    nonisolated(unsafe) private static let trieCache = NSCache<NSString, TokenTrieBox>()
+    private static let cacheMutex = Mutex(())
+    
     public static func build(keys: [String], tokenizer: TokenizerAdapter) -> TokenTrie {
         var trie = TokenTrie()
         let uniqueKeys = Set(keys).filter { !$0.isEmpty }
@@ -204,28 +216,27 @@ public enum TokenTrieBuilder {
         return build(keys: schema.keys, tokenizer: tokenizer)
     }
     
-    // Thread-safe cache using Mutex for synchronization
-    // NSCache access is protected by cacheMutex
-    nonisolated(unsafe) private static let trieCache = NSCache<NSString, AnyObject>()
-    private static let cacheMutex = Mutex(())
-    
     public static func buildCached(schema: SchemaMeta, tokenizer: TokenizerAdapter) -> TokenTrie {
-        let cacheKey = schema.keys.sorted().joined(separator: "|") as NSString
-        
-        // Check cache first
-        let cached = cacheMutex.withLock { _ in
-            trieCache.object(forKey: cacheKey) as? TokenTrie
+        // Cache key = tokenizer fingerprint + schema keys (sorted)
+        let tokenizerFingerprint = tokenizer.fingerprint()
+        let schemaKey = schema.keys.sorted().joined(separator: "|")
+        let cacheKey = "\(tokenizerFingerprint)|\(schemaKey)" as NSString
+
+        // Use explicit closure to handle cache access safely
+        let cachedTrie = cacheMutex.withLock { _ -> TokenTrie? in
+            trieCache.object(forKey: cacheKey)?.value
         }
-        if let cached = cached {
+        
+        if let cached = cachedTrie {
             return cached
         }
         
-        // Build outside of lock to avoid blocking other threads
+        // Build outside lock to avoid blocking other threads
         let trie = build(from: schema, tokenizer: tokenizer)
         
         // Store in cache
-        cacheMutex.withLock { _ in
-            trieCache.setObject(trie as AnyObject, forKey: cacheKey)
+        cacheMutex.withLock { _ -> Void in
+            trieCache.setObject(TokenTrieBox(trie), forKey: cacheKey)
         }
         
         return trie

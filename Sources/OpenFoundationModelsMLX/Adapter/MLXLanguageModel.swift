@@ -73,6 +73,15 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                             if let text = delta.deltaText, !text.isEmpty {
                                 if expectsTool {
                                     buffer += text
+                                    // Buffer limit check (2MB, same as engine)
+                                    let bufferLimitBytes = 2 * 1024 * 1024
+                                    if buffer.utf8.count > bufferLimitBytes {
+                                        Logger.warning("[MLXLanguageModel] Tool detection buffer exceeded (\(bufferLimitBytes/1024)KB)")
+                                        let msg = "[Error] Stream buffer exceeded during tool detection"
+                                        continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: msg))])))
+                                        continuation.finish()
+                                        return
+                                    }
                                     if let entry = ToolCallDetector.entryIfPresent(buffer) {
                                         continuation.yield(entry)
                                         emittedToolCalls = true

@@ -17,24 +17,13 @@ enum OptionsMapper {
         )
 
         // Extract sampling mode parameters
-        // Since SamplingMode.Kind is private, we need to check equality with static constructors
-        if let mode = options.sampling {
-            if mode == .greedy {
-                // For greedy mode, only override temperature if not explicitly set
-                if sampling.temperature == nil {
-                    sampling.temperature = 0.0
-                }
-                sampling.topK = 1
-            } else {
-                // For random sampling modes, we can't extract the values directly
-                // due to private Kind enum. We'll rely on the temperature field
-                // from GenerationOptions as a fallback.
-                // This is a limitation of the current API design.
-                if options.temperature == 0 {
-                    // Likely greedy mode requested via temperature
-                    sampling.topK = 1
-                }
+        // NOTE: SamplingMode.Kind is private, so we cannot directly compare mode types.
+        // We infer greedy mode from temperature=0 as a safe fallback.
+        if options.temperature == 0 {
+            if sampling.temperature == nil { 
+                sampling.temperature = 0.0 
             }
+            sampling.topK = 1
         }
 
         return sampling

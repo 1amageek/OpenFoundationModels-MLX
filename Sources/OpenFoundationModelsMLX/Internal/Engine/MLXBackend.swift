@@ -147,7 +147,7 @@ actor MLXBackend {
     /// Get current process resident memory in bytes
     private func currentResidentMemory() -> UInt64 {
         var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
         
         let kerr = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
@@ -210,53 +210,22 @@ actor MLXBackend {
             throw MLXBackendError.noModelLoaded
         }
         
-        // Retry logic with exponential backoff
-        let maxAttempts = 3
-        var lastError: Error?
-        let baseDelay: UInt64 = 100_000_000 // 100ms in nanoseconds
+        let result = try await attemptConstrainedGeneration(
+            prompt: prompt,
+            sampling: sampling,
+            schema: schema,
+            container: container
+        )
         
-        for attempt in 1...maxAttempts {
-            // Apply exponential backoff delay (except on first attempt)
-            if attempt > 1 {
-                let delay = baseDelay * UInt64(1 << (attempt - 2)) // 100ms, 200ms, 400ms...
-                try await Task.sleep(nanoseconds: min(delay, 2_000_000_000)) // Cap at 2 seconds
-                Logger.debug("[MLXBackend] Retry attempt \(attempt) after \(delay / 1_000_000)ms delay")
-            }
-            
-            do {
-                let result = try await attemptConstrainedGeneration(
-                    prompt: prompt,
-                    sampling: sampling,
-                    schema: schema,
-                    container: container
-                )
-                
-                // Validate the result
-                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                if validator.validate(text: result, schema: schema) {
-                    Logger.info("[MLXBackend] Valid JSON generated on attempt \(attempt)")
-                    return result
-                } else {
-                    lastError = JSONGenerationError.schemaViolation(
-                        reason: "Generated JSON does not match schema"
-                    )
-                    Logger.warning("[MLXBackend] Schema validation failed on attempt \(attempt)")
-                }
-                
-            } catch let error as JSONGenerationError {
-                // Early detection - retry with backoff
-                Logger.warning("[MLXBackend] Generation aborted on attempt \(attempt): \(error)")
-                lastError = error
-            } catch {
-                // Other errors
-                Logger.error("[MLXBackend] Unexpected error on attempt \(attempt): \(error)")
-                lastError = error
-            }
+        // Validate the result
+        let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
+        guard validator.validate(text: result, schema: schema) else {
+            throw JSONGenerationError.schemaViolation(
+                reason: "Generated JSON does not match schema"
+            )
         }
         
-        throw lastError ?? JSONGenerationError.schemaViolation(
-            reason: "Failed to generate valid JSON after \(maxAttempts) attempts"
-        )
+        return result
     }
     
     private func attemptConstrainedGeneration(
@@ -353,51 +322,22 @@ actor MLXBackend {
             throw MLXBackendError.noModelLoaded
         }
         
-        // Retry logic with exponential backoff
-        let maxAttempts = 3
-        var lastError: Error?
-        let baseDelay: UInt64 = 100_000_000 // 100ms in nanoseconds
+        let result = try await attemptConstrainedGenerationWithParams(
+            prompt: prompt,
+            parameters: parameters,
+            schema: schema,
+            container: container
+        )
         
-        for attempt in 1...maxAttempts {
-            // Apply exponential backoff delay (except on first attempt)
-            if attempt > 1 {
-                let delay = baseDelay * UInt64(1 << (attempt - 2)) // 100ms, 200ms, 400ms...
-                try await Task.sleep(nanoseconds: min(delay, 2_000_000_000)) // Cap at 2 seconds
-                Logger.debug("[MLXBackend] Retry attempt \(attempt) after \(delay / 1_000_000)ms delay")
-            }
-            
-            do {
-                let result = try await attemptConstrainedGenerationWithParams(
-                    prompt: prompt,
-                    parameters: parameters,
-                    schema: schema,
-                    container: container
-                )
-                
-                // Validate the result
-                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                if validator.validate(text: result, schema: schema) {
-                    Logger.info("[MLXBackend] Valid JSON generated on attempt \(attempt)")
-                    return result
-                } else {
-                    lastError = JSONGenerationError.schemaViolation(
-                        reason: "Generated JSON does not match schema"
-                    )
-                    Logger.warning("[MLXBackend] Schema validation failed on attempt \(attempt)")
-                }
-                
-            } catch let error as JSONGenerationError {
-                Logger.warning("[MLXBackend] Generation aborted on attempt \(attempt): \(error)")
-                lastError = error
-            } catch {
-                Logger.error("[MLXBackend] Unexpected error on attempt \(attempt): \(error)")
-                lastError = error
-            }
+        // Validate the result
+        let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
+        guard validator.validate(text: result, schema: schema) else {
+            throw JSONGenerationError.schemaViolation(
+                reason: "Generated JSON does not match schema"
+            )
         }
         
-        throw lastError ?? JSONGenerationError.schemaViolation(
-            reason: "Failed to generate valid JSON after \(maxAttempts) attempts"
-        )
+        return result
     }
     
     private func attemptConstrainedGenerationWithParams(

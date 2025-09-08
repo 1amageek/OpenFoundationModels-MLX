@@ -119,6 +119,24 @@ public final class JSONStateMachine: Sendable {
                 state.phase = .inArray(.expectValue)
                 state.depth += 1
                 state.stack.append(Frame(isObject: false))
+            } else if char == "\"" {
+                // Root-level string
+                state.phase = .inString(.body(kind: .value, escaped: false))
+            } else if char.isWholeNumber || char == "-" {
+                // Root-level number
+                state.phase = .inNumber(char == "0" ? .intZero : (char == "-" ? .intStart : .intNonZero))
+            } else if char == "t" {
+                // Root-level true
+                state.phase = .inLiteral(.t1)
+            } else if char == "f" {
+                // Root-level false
+                state.phase = .inLiteral(.f1)
+            } else if char == "n" {
+                // Root-level null
+                state.phase = .inLiteral(.n1)
+            } else if !char.isWhitespace {
+                // Invalid character at root
+                state.phase = .error
             }
             
         case .inObject(let objPhase):
@@ -129,7 +147,11 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "}" {
                     state.depth -= 1
                     _ = state.stack.popLast()
-                    state.phase = state.stack.isEmpty ? .done : .inObject(.afterValue)
+                    if state.stack.isEmpty {
+                        state.phase = .done
+                    } else if let frame = state.stack.last {
+                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
+                    }
                 }
                 
             case .expectColon:
@@ -148,7 +170,7 @@ public final class JSONStateMachine: Sendable {
                     state.phase = .inArray(.expectValue)
                     state.depth += 1
                     state.stack.append(Frame(isObject: false))
-                } else if char.isNumber || char == "-" {
+                } else if char.isWholeNumber || char == "-" {
                     state.phase = .inNumber(.intStart)
                 } else if char == "t" {
                     state.phase = .inLiteral(.t1)
@@ -164,7 +186,11 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "}" {
                     state.depth -= 1
                     _ = state.stack.popLast()
-                    state.phase = state.stack.isEmpty ? .done : .inObject(.afterValue)
+                    if state.stack.isEmpty {
+                        state.phase = .done
+                    } else if let frame = state.stack.last {
+                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
+                    }
                 }
             }
             
@@ -179,8 +205,11 @@ public final class JSONStateMachine: Sendable {
                     // String ended
                     if kind == .key {
                         state.phase = .inObject(.expectColon)
-                    } else {
-                        state.phase = .inObject(.afterValue)
+                    } else if state.stack.isEmpty {
+                        // Root-level string completed
+                        state.phase = .done
+                    } else if let frame = state.stack.last {
+                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
                     }
                 }
                 
@@ -210,7 +239,7 @@ public final class JSONStateMachine: Sendable {
                     state.phase = .inArray(.expectValue)
                     state.depth += 1
                     state.stack.append(Frame(isObject: false))
-                } else if char.isNumber || char == "-" {
+                } else if char.isWholeNumber || char == "-" {
                     state.phase = .inNumber(char == "0" ? .intZero : (char == "-" ? .intStart : .intNonZero))
                 } else if char == "t" {
                     state.phase = .inLiteral(.t1)
@@ -236,17 +265,18 @@ public final class JSONStateMachine: Sendable {
             
         case .inNumber(let numPhase):
             // Handle number state transitions
-            let isValueTerminator = char == "," || char == "]" || char == "}"
+            let isValueTerminator = (char == ",") || (char == "]") || (char == "}")
             
             if isValueTerminator {
                 // Number ended, return to enclosing context
-                if let frame = state.stack.last {
-                    state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
-                } else {
+                if state.stack.isEmpty {
+                    // Root-level number completed
                     state.phase = .done
+                } else if let frame = state.stack.last {
+                    state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
+                    // Re-process the terminator in the new phase
+                    processCharacterInternal(char, &state)
                 }
-                // Re-process the terminator in the new phase
-                processCharacterInternal(char, &state)
                 return
             }
             
@@ -255,7 +285,7 @@ public final class JSONStateMachine: Sendable {
             case .intStart:
                 if char == "0" {
                     state.phase = .inNumber(.intZero)
-                } else if char.isNumber {
+                } else if char.isWholeNumber {
                     state.phase = .inNumber(.intNonZero)
                 }
             case .intZero:
@@ -265,7 +295,7 @@ public final class JSONStateMachine: Sendable {
                     state.phase = .inNumber(.expStart)
                 }
             case .intNonZero:
-                if char.isNumber {
+                if char.isWholeNumber {
                     // Stay in intNonZero
                     break
                 } else if char == "." {
@@ -274,7 +304,7 @@ public final class JSONStateMachine: Sendable {
                     state.phase = .inNumber(.expStart)
                 }
             case .fracStart, .frac:
-                if char.isNumber {
+                if char.isWholeNumber {
                     state.phase = .inNumber(.frac)
                 } else if char == "e" || char == "E" {
                     state.phase = .inNumber(.expStart)
@@ -282,17 +312,17 @@ public final class JSONStateMachine: Sendable {
             case .expStart:
                 if char == "+" || char == "-" {
                     state.phase = .inNumber(.expSign)
-                } else if char.isNumber {
+                } else if char.isWholeNumber {
                     state.phase = .inNumber(.exp)
                 }
             case .expSign:
-                if char.isNumber {
+                if char.isWholeNumber {
                     state.phase = .inNumber(.exp)
                 } else {
                     state.phase = .error
                 }
             case .exp:
-                if !char.isNumber {
+                if !char.isWholeNumber {
                     // Invalid character in exponent
                     state.phase = .error
                 }
@@ -303,13 +333,13 @@ public final class JSONStateMachine: Sendable {
             switch litPhase {
             case .t1: state.phase = char == "r" ? .inLiteral(.t2) : .error
             case .t2: state.phase = char == "u" ? .inLiteral(.t3) : .error
-            case .t3: 
+            case .t3:
                 if char == "e" {
-                    // "true" complete, check what comes next
-                    if let frame = state.stack.last {
-                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
-                    } else {
+                    // "true" complete
+                    if state.stack.isEmpty {
                         state.phase = .done
+                    } else if let frame = state.stack.last {
+                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
                     }
                 } else {
                     state.phase = .error
@@ -320,10 +350,10 @@ public final class JSONStateMachine: Sendable {
             case .f4:
                 if char == "e" {
                     // "false" complete
-                    if let frame = state.stack.last {
-                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
-                    } else {
+                    if state.stack.isEmpty {
                         state.phase = .done
+                    } else if let frame = state.stack.last {
+                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
                     }
                 } else {
                     state.phase = .error
@@ -333,10 +363,10 @@ public final class JSONStateMachine: Sendable {
             case .n3:
                 if char == "l" {
                     // "null" complete
-                    if let frame = state.stack.last {
-                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
-                    } else {
+                    if state.stack.isEmpty {
                         state.phase = .done
+                    } else if let frame = state.stack.last {
+                        state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
                     }
                 } else {
                     state.phase = .error

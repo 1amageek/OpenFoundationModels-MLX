@@ -26,6 +26,11 @@ struct TokenTrieTests {
         func getVocabSize() -> Int? {
             return 128  // ASCII range
         }
+        
+        func fingerprint() -> String {
+            // Simple fingerprint for test tokenizer
+            return "TokenTrieTests.MockTokenizer-ASCII-128"
+        }
     }
     
     // MARK: - Basic Functionality Tests
