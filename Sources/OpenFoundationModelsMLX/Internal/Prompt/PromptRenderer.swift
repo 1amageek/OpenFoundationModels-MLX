@@ -13,45 +13,36 @@ enum PromptRenderer {
     ) throws -> ChatRequest {
         // Extract from transcript
         let ext = TranscriptAccess.extract(from: transcript)
-        var messages: [ChatMessage] = []
-        if let sys = ext.systemText, !sys.isEmpty {
-            messages.append(.init(role: .system, content: sys))
-        }
-        for m in ext.messages { messages.append(m) }
-
+        
         // Build ModelCardInput for rendering
         // NOTE: System is passed via ModelCardInput.system field only to avoid duplication.
         // The ModelCard is responsible for incorporating it into the final prompt.
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withFullDate]
         let today = dateFormatter.string(from: Date())
+        
+        // Messages already come as ModelCardInput.Message from TranscriptAccess
+        // Filter out system messages to avoid duplication since system is passed separately
+        let filteredMessages = ext.messages.filter { $0.role != .system }
+        
         let input = ModelCardInput(
             currentDate: today,
             system: ext.systemText,
-            messages: messages
-                .filter { $0.role != .system }  // Exclude system messages to avoid duplication
-                .map { chat in
-                    switch chat.role {
-                    case .user:
-                        return .init(role: .user, content: chat.content)
-                    case .assistant:
-                        return .init(role: .assistant, content: chat.content)
-                    case .system:
-                        // Should not reach here due to filter
-                        return .init(role: .system, content: chat.content)
-                    }
-                },
+            messages: filteredMessages,
             tools: ext.toolDefs.map { .init(name: $0.name, description: $0.description, parametersJSON: $0.parametersJSON) }
         )
 
-        // Let ModelCard decide; if rendering fails, bubble the error up.
-        let prompt: String = try card.render(input: input)
+        // SSOT: ModelCard.render output is the final prompt
+        let prompt = try card.render(input: input)
 
         // Map transcript response format -> schema meta (no env fallback)
         let responseFormat: ResponseFormatSpec = {
-            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { return .jsonSchema(schemaJSON: schemaJSON) }
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
+                return .jsonSchema(schemaJSON: schemaJSON) 
+            }
             return .text
         }()
+        
         let schemaMeta: SchemaMeta? = {
             switch responseFormat {
             case .jsonSchema(let json):
@@ -62,23 +53,23 @@ enum PromptRenderer {
                     return SchemaMeta(keys: keys, required: required)
                 }
                 return nil
-            default: return nil
+            default: 
+                return nil
             }
         }()
 
-        // Keep retry policy minimal; do not consult env. Seed-based override handled downstream if needed.
+        // No retry policy needed anymore
         let sampling = OptionsMapper.map(options)
         // Keep implementation simple: if caller provided GenerationOptions,
         // prefer sampling path; otherwise use card.params as-is.
         let directParams: GenerateParameters? = (options == nil) ? card.params : nil
+        
         let req = ChatRequest(
             modelID: card.id,
-            messages: messages,
+            prompt: prompt,
             responseFormat: responseFormat,
             sampling: sampling,
-            policy: .init(retryMaxTries: 2),
             schema: schemaMeta,
-            promptOverride: prompt,
             parameters: directParams
         )
         return req

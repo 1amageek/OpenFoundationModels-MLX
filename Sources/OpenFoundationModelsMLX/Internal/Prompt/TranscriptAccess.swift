@@ -1,13 +1,14 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
+import MLXLMCommon
 
 // Extract information needed for prompt construction from Transcript
 // using strongly-typed access via OpenFoundationModelsExtra.
 enum TranscriptAccess {
     struct Extracted: Sendable {
         var systemText: String?
-        var messages: [ChatMessage] // ordered user/assistant history
+        var messages: [ModelCardInput.Message] // Use ModelCardInput.Message directly
         var schemaJSON: String?
         var toolDefs: [(name: String, description: String?, parametersJSON: String?)]
     }
@@ -34,12 +35,16 @@ enum TranscriptAccess {
                 lastPromptRF = p.responseFormat
             case .response(let r):
                 let text = flattenTextSegments(r.segments)
-                if !text.isEmpty { out.messages.append(.init(role: .assistant, content: text)) }
+                if !text.isEmpty { 
+                    out.messages.append(.init(role: .assistant, content: text))
+                }
             default:
                 continue
             }
         }
-        if let rf = lastPromptRF, let schemaJSON = schemaJSONString(from: rf) { out.schemaJSON = schemaJSON }
+        if let rf = lastPromptRF, let schemaJSON = schemaJSONString(from: rf) { 
+            out.schemaJSON = schemaJSON 
+        }
         
         return out
     }

@@ -5,14 +5,7 @@ import MLXLMCommon
 // These types are not exported as public API; they support the internal
 // core/engine design while keeping the OpenFoundationModels LanguageModel API intact.
 
-enum ChatRole: String, Codable, Sendable {
-    case system, user, assistant
-}
-
-struct ChatMessage: Codable, Sendable {
-    let role: ChatRole
-    let content: String
-}
+// ChatRole and ChatMessage removed - no longer needed with prompt-based approach
 
 enum ResponseFormatSpec: Sendable {
     case text
@@ -29,31 +22,24 @@ struct SamplingParameters: Codable, Sendable {
     var seed: Int?
 }
 
-struct ChatPolicy: Codable, Sendable {
-    var retryMaxTries: Int = 2
-}
-
 struct ChatRequest: Sendable {
     let modelID: String
-    let messages: [ChatMessage]
+    let prompt: String  // The final rendered prompt from ModelCard.render
     let responseFormat: ResponseFormatSpec
     let sampling: SamplingParameters
-    let policy: ChatPolicy
     let schema: SchemaMeta?
-    // If provided, the prompt string is used as-is.
-    let promptOverride: String?
     // If provided, backend should use these parameters as-is.
     let parameters: GenerateParameters?
 }
 
 struct ChatChoice: Sendable {
-    let message: ChatMessage
+    let content: String  // Direct text content instead of ChatMessage
     let finishReason: String
 }
 
 struct ChatUsage: Sendable { let promptTokens: Int; let completionTokens: Int }
 
-struct ChatResponseMeta: Sendable { let retries: Int }
+struct ChatResponseMeta: Sendable { }
 
 struct ChatResponse: Sendable {
     let choices: [ChatChoice]
@@ -68,7 +54,6 @@ struct ChatDelta: Sendable {
 
 struct ChatChunk: Sendable {
     let deltas: [ChatDelta]
-    let tryIndex: Int
 }
 
 // Pre-parsed schema summary to drive constrained decoding and validation.

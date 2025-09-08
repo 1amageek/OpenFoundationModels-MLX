@@ -20,7 +20,10 @@ enum OptionsMapper {
         // Since SamplingMode.Kind is private, we need to check equality with static constructors
         if let mode = options.sampling {
             if mode == .greedy {
-                sampling.temperature = 0.0
+                // For greedy mode, only override temperature if not explicitly set
+                if sampling.temperature == nil {
+                    sampling.temperature = 0.0
+                }
                 sampling.topK = 1
             } else {
                 // For random sampling modes, we can't extract the values directly

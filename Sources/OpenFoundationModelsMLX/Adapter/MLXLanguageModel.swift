@@ -26,7 +26,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             let res = try await engine.generate(req)
             // Convert the assistant text into a Transcript.Entry.response in a
             // conservative way: return plain text response segment.
-            if let text = res.choices.first?.message.content {
+            if let text = res.choices.first?.content {
                 if let entry = ToolCallDetector.entryIfPresent(text) {
                     return entry
                 }

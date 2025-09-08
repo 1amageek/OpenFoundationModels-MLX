@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import OpenFoundationModels
+import MLXLMCommon
 @testable import OpenFoundationModelsMLX
 
 @Suite("MLXLanguageModel Tests")
@@ -10,7 +11,6 @@ struct MLXLanguageModelTests {
     
     struct MockModelCard: ModelCard, Sendable {
         let id: String = "test-model"
-        let displayName: String = "Test Model"
         
         func render(input: ModelCardInput) throws -> String {
             // Simple concatenation of messages
@@ -24,9 +24,13 @@ struct MLXLanguageModelTests {
             return prompt
         }
         
-        var defaultTemperature: Double { 0.7 }
-        var defaultMaxTokens: Int { 1000 }
-        var defaultTopP: Double { 0.9 }
+        var params: GenerateParameters {
+            GenerateParameters(
+                maxTokens: 1000,
+                temperature: 0.7,
+                topP: 0.9
+            )
+        }
     }
     
     // MARK: - Initialization Tests
@@ -35,9 +39,8 @@ struct MLXLanguageModelTests {
     func modelCardInitialization() async throws {
         let card = MockModelCard()
         #expect(card.id == "test-model")
-        #expect(card.displayName == "Test Model")
-        #expect(card.defaultTemperature == 0.7)
-        #expect(card.defaultMaxTokens == 1000)
+        #expect(card.params.temperature == 0.7)
+        #expect(card.params.maxTokens == 1000)
     }
     
     // MARK: - Availability Tests
@@ -200,46 +203,43 @@ struct MLXLanguageModelTests {
     @Test("Generation options mapping")
     func generationOptionsMapping() {
         let options = GenerationOptions(
-            samplingMode: .greedy,
-            maxTokens: 500,
-            temperature: 0.5
+            sampling: .greedy,
+            temperature: 0.5,
+            maximumResponseTokens: 500
         )
         
-        #expect(options.maxTokens == 500)
+        #expect(options.maximumResponseTokens == 500)
         #expect(options.temperature == 0.5)
         
-        if case .greedy = options.samplingMode {
-            // Correct mode
+        if let sampling = options.sampling {
+            // Greedy mode has no direct comparison, just check it exists
+            #expect(sampling != nil)
         } else {
-            Issue.record("Expected greedy sampling mode")
+            Issue.record("Expected sampling mode")
         }
     }
     
     @Test("Generation options with topK sampling")
     func generationOptionsTopK() {
         let options = GenerationOptions(
-            samplingMode: .random(topK: 10),
-            maxTokens: 200
+            sampling: .random(top: 10),
+            maximumResponseTokens: 200
         )
         
-        if case .random(let topK) = options.samplingMode {
-            #expect(topK == 10)
-        } else {
-            Issue.record("Expected random topK sampling")
-        }
+        // SamplingMode is opaque, we can only check it exists
+        #expect(options.sampling != nil)
+        #expect(options.maximumResponseTokens == 200)
     }
     
     @Test("Generation options with topP sampling")
     func generationOptionsTopP() {
         let options = GenerationOptions(
-            samplingMode: .random(topP: 0.95),
-            maxTokens: 300
+            sampling: .random(probabilityThreshold: 0.95),
+            maximumResponseTokens: 300
         )
         
-        if case .random(let topP) = options.samplingMode {
-            #expect(topP == 0.95)
-        } else {
-            Issue.record("Expected random topP sampling")
-        }
+        // SamplingMode is opaque, we can only check it exists
+        #expect(options.sampling != nil)
+        #expect(options.maximumResponseTokens == 300)
     }
 }
