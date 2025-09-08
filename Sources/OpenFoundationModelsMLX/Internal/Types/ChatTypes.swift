@@ -1,4 +1,5 @@
 import Foundation
+import PRECISE
 import MLXLMCommon
 
 // Internal chat-style types used by the MLXChatEngine.
@@ -54,15 +55,4 @@ struct ChatDelta: Sendable {
 
 struct ChatChunk: Sendable {
     let deltas: [ChatDelta]
-}
-
-// Pre-parsed schema summary to drive constrained decoding and validation.
-public struct SchemaMeta: Sendable {
-    public let keys: [String]
-    public let required: [String]
-    
-    public init(keys: [String], required: [String]) {
-        self.keys = keys
-        self.required = required
-    }
 }

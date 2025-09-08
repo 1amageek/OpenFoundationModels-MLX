@@ -1,4 +1,5 @@
 import Foundation
+import PRECISE
 import MLXLMCommon
 
 // Optional developer-facing facade that mirrors a minimal Chat API.

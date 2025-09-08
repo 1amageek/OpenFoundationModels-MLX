@@ -1,5 +1,5 @@
 import Foundation
-
+import PRECISE
 /// Dynamic buffer size adjustment based on JSON complexity and memory pressure
 private struct DynamicBufferSizer {
     private let baseSize: Int = 512 * 1024  // 512KB base

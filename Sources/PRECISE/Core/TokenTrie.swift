@@ -3,22 +3,22 @@ import Foundation
 // Token-level trie for schema keys. Uses token ids (Int32) provided by a
 // tokenizer adapter. This enables strict next-token constraints during key
 // emission.
-struct TokenTrie: Sendable {
+public struct TokenTrie: Sendable {
     // Note: Node is @unchecked Sendable because children are mutable during construction,
     // but immutable after the trie is built. This is safe as long as the trie is not
     // modified after construction (which is guaranteed by the struct's design).
-    final class Node: @unchecked Sendable { 
+    public final class Node: @unchecked Sendable { 
         var children: [Int32: Node] = [:]
         var terminal = false 
         var keyName: String? // Store the original key name for debugging
     }
     
-    let root = Node()  // Made internal for Path initialization
-    var allKeys: Set<String> = []
+    public let root = Node()  // Made internal for Path initialization
+    public var allKeys: Set<String> = []
 
     init() {}
 
-    mutating func insert(tokenIDs: [Int32], keyName: String? = nil) {
+    public mutating func insert(tokenIDs: [Int32], keyName: String? = nil) {
         guard !tokenIDs.isEmpty else { return }
         var node = root
         for id in tokenIDs {
@@ -33,7 +33,7 @@ struct TokenTrie: Sendable {
     }
 
     // Returns the node reached by following the given path; nil if no path.
-    func node(for path: [Int32]) -> Node? {
+    public func node(for path: [Int32]) -> Node? {
         var node = root
         for id in path {
             guard let n = node.children[id] else { return nil }
@@ -42,13 +42,13 @@ struct TokenTrie: Sendable {
         return node
     }
 
-    func allowedNext(from path: [Int32]) -> (ids: Set<Int32>, atTerminal: Bool)? {
+    public func allowedNext(from path: [Int32]) -> (ids: Set<Int32>, atTerminal: Bool)? {
         guard let node = node(for: path) else { return nil }
         return (Set(node.children.keys), node.terminal)
     }
     
     // Get all allowed token IDs from current path
-    func getAllowedTokens(for path: Path) -> Set<Int32> {
+    public func getAllowedTokens(for path: Path) -> Set<Int32> {
         guard let currentNode = path.currentNode ?? node(for: path.tokens) else {
             return []
         }
@@ -56,7 +56,7 @@ struct TokenTrie: Sendable {
     }
     
     // Check if we can complete a key from current position
-    func canComplete(from path: Path) -> Bool {
+    public func canComplete(from path: Path) -> Bool {
         guard let currentNode = path.currentNode ?? node(for: path.tokens) else {
             return false
         }
@@ -64,19 +64,19 @@ struct TokenTrie: Sendable {
     }
     
     // Path tracker for maintaining state during generation
-    struct Path: Sendable {
-        private(set) var tokens: [Int32] = []
-        private(set) var currentNode: Node?
+    public struct Path: Sendable {
+        public private(set) var tokens: [Int32] = []
+        public private(set) var currentNode: Node?
         
-        init() {
+        public init() {
             self.currentNode = nil
         }
         
-        init(root: Node) {
+        public init(root: Node) {
             self.currentNode = root
         }
         
-        mutating func append(_ tokenID: Int32, in trie: TokenTrie) -> Bool {
+        public mutating func append(_ tokenID: Int32, in trie: TokenTrie) -> Bool {
             let nextNode: Node?
             if let current = currentNode {
                 nextNode = current.children[tokenID]
@@ -94,20 +94,20 @@ struct TokenTrie: Sendable {
             return true
         }
         
-        mutating func reset(to root: Node? = nil) {
+        public mutating func reset(to root: Node? = nil) {
             tokens.removeAll(keepingCapacity: true)
             currentNode = root
         }
         
-        func isAtTerminal() -> Bool {
+        public func isAtTerminal() -> Bool {
             return currentNode?.terminal ?? false
         }
         
-        func getKeyName() -> String? {
+        public func getKeyName() -> String? {
             return currentNode?.keyName
         }
         
-        func isValid() -> Bool {
+        public func isValid() -> Bool {
             return currentNode != nil
         }
     }
@@ -115,14 +115,14 @@ struct TokenTrie: Sendable {
 
 // Minimal tokenizer adapter protocol for building token tries without binding to
 // a specific backend. Implementations can wrap MLXLLM or any other tokenizer.
-protocol TokenizerAdapter: Sendable {
+public protocol TokenizerAdapter: Sendable {
     func encode(_ text: String) -> [Int32]
     func decode(_ ids: [Int32]) -> String
     func getVocabSize() -> Int?  // Optional vocab size for logits allocation
 }
 
-enum TokenTrieBuilder {
-    static func build(keys: [String], tokenizer: TokenizerAdapter) -> TokenTrie {
+public enum TokenTrieBuilder {
+    public static func build(keys: [String], tokenizer: TokenizerAdapter) -> TokenTrie {
         var trie = TokenTrie()
         // Remove duplicates and filter empty strings
         let uniqueKeys = Set(keys).filter { !$0.isEmpty }
@@ -135,7 +135,7 @@ enum TokenTrieBuilder {
     }
     
     // Build from schema metadata
-    static func build(from schema: SchemaMeta, tokenizer: TokenizerAdapter) -> TokenTrie {
+    public static func build(from schema: SchemaMeta, tokenizer: TokenizerAdapter) -> TokenTrie {
         return build(keys: schema.keys, tokenizer: tokenizer)
     }
     
@@ -159,7 +159,7 @@ enum TokenTrieBuilder {
         }
     }
     
-    static func buildCached(schema: SchemaMeta, tokenizer: TokenizerAdapter, tokenizerID: String? = nil) -> TokenTrie {
+    public static func buildCached(schema: SchemaMeta, tokenizer: TokenizerAdapter, tokenizerID: String? = nil) -> TokenTrie {
         // Build comprehensive fingerprint to prevent cross-tokenizer cache reuse
         var fingerprintComponents: [String] = []
         

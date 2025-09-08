@@ -1,5 +1,5 @@
 import Foundation
-
+import PRECISE
 // Mask hint generation for JSON state machine
 // Provides allowed token sets based on current parsing state
 public struct JSONMaskHint: Sendable {

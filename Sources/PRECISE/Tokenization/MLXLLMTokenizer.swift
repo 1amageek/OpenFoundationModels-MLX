@@ -3,65 +3,6 @@ import MLXLMCommon
 import MLXLLM
 import Tokenizers
 
-// High-performance decode cache with thread-safe access
-private final class DecodeCache {
-    private var cache: [Int32: String] = [:]
-    private let lock = NSLock()
-    private let maxEntries: Int
-    
-    // Statistics for monitoring
-    private(set) var hits: Int = 0
-    private(set) var misses: Int = 0
-    
-    init(maxEntries: Int = 1000) {
-        self.maxEntries = maxEntries
-    }
-    
-    func get(_ tokenID: Int32) -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        if let cached = cache[tokenID] {
-            hits += 1
-            return cached
-        } else {
-            misses += 1
-            return nil
-        }
-    }
-    
-    func set(_ tokenID: Int32, _ text: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        // Simple eviction if cache is too large
-        if cache.count >= maxEntries {
-            // Remove ~10% of oldest entries (approximation using dictionary ordering)
-            let toRemove = max(1, cache.count / 10)
-            for _ in 0..<toRemove {
-                if let firstKey = cache.keys.first {
-                    cache.removeValue(forKey: firstKey)
-                }
-            }
-        }
-        
-        cache[tokenID] = text
-    }
-    
-    func clear() {
-        lock.lock()
-        defer { lock.unlock() }
-        cache.removeAll()
-        hits = 0
-        misses = 0
-    }
-    
-    var hitRate: Double {
-        let total = hits + misses
-        return total > 0 ? Double(hits) / Double(total) : 0.0
-    }
-}
-
 // Concrete implementation of TokenizerAdapter for MLXLLM
 // This wraps the MLXLMCommon Tokenizer to provide token encoding/decoding
 // for Schema-Constrained Decoding (SCD)
@@ -78,18 +19,23 @@ public final class MLXLLMTokenizer: TokenizerAdapter, @unchecked Sendable {
         public let bracketCloseTokens: Set<Int32> // Tokens containing ']'
         public let whitespaceTokens: Set<Int32>    // Pure whitespace tokens
         public let backslashTokens: Set<Int32>     // Tokens containing '\'
+        
+        // Convenience properties for single token access
+        public var quote: Int32? { quoteTokens.first }
+        public var colon: Int32? { colonTokens.first }
+        public var comma: Int32? { commaTokens.first }
+        public var braceOpen: Int32? { braceOpenTokens.first }
+        public var braceClose: Int32? { braceCloseTokens.first }
     }
     
     private let tokenizer: any Tokenizer
     private var _specialTokens: SpecialTokens?
     private var _tokenizerFingerprint: String?
-    private let decodeCache: DecodeCache
     
     public init(tokenizer: any Tokenizer) {
         self.tokenizer = tokenizer
         self._specialTokens = nil
         self._tokenizerFingerprint = nil
-        self.decodeCache = DecodeCache()
     }
     
     // MARK: - TokenizerAdapter Protocol
@@ -115,21 +61,8 @@ public final class MLXLLMTokenizer: TokenizerAdapter, @unchecked Sendable {
     // MARK: - Extended API
     
     public func decodeToken(_ id: Int32) -> String {
-        // Check cache first for performance
-        if let cached = decodeCache.get(id) {
-            return cached
-        }
-        
-        // Decode and cache the result
-        let decoded = decode([id])
-        decodeCache.set(id, decoded)
-        
-        // Log cache performance periodically
-        if (decodeCache.hits + decodeCache.misses) % 1000 == 0 {
-            Logger.debug("[MLXLLMTokenizer] Decode cache hit rate: \(String(format: "%.1f", decodeCache.hitRate * 100))%")
-        }
-        
-        return decoded
+        // Direct decode without caching - MLX handles optimization
+        return decode([id])
     }
     
     public func getSpecialTokens() -> SpecialTokens? {

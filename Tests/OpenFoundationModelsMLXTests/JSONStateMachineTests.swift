@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import OpenFoundationModelsMLX
+@testable import PRECISE
 
 @Suite("JSON State Machine Tests")
 struct JSONStateMachineTests {

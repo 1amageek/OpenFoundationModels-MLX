@@ -1,110 +1,9 @@
 import Foundation
+import PRECISE
 @preconcurrency import MLX
 import MLXLMCommon
 import MLXLLM
 @preconcurrency import Tokenizers
-
-/// High-performance mask cache with LRU eviction and memory management
-private final class MaskCache {
-    private struct CacheKey: Hashable {
-        let tokenIds: [Int32]
-        let hash: Int
-        
-        init(tokens: Set<Int32>) {
-            self.tokenIds = Array(tokens).sorted()
-            self.hash = tokenIds.hashValue
-        }
-        
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(hash)
-        }
-        
-        static func == (lhs: CacheKey, rhs: CacheKey) -> Bool {
-            return lhs.hash == rhs.hash && lhs.tokenIds == rhs.tokenIds
-        }
-    }
-    
-    private struct CacheEntry {
-        let mask: MLXArray
-        var lastUsed: Date
-        let memorySize: Int
-        
-        init(mask: MLXArray) {
-            self.mask = mask
-            self.lastUsed = Date()
-            // Estimate memory size: Float array size
-            self.memorySize = mask.size * MemoryLayout<Float>.size
-        }
-        
-        mutating func updateLastUsed() {
-            self.lastUsed = Date()
-        }
-    }
-    
-    private var cache: [CacheKey: CacheEntry] = [:]
-    private let maxEntries: Int
-    private let maxMemoryBytes: Int
-    private var currentMemoryUsage: Int = 0
-    
-    // Statistics for performance monitoring
-    private(set) var hits: Int = 0
-    private(set) var misses: Int = 0
-    
-    init(maxEntries: Int = 50, maxMemoryMB: Int = 10) {
-        self.maxEntries = maxEntries
-        self.maxMemoryBytes = maxMemoryMB * 1024 * 1024
-    }
-    
-    func get(_ tokens: Set<Int32>) -> MLXArray? {
-        let key = CacheKey(tokens: tokens)
-        
-        if var entry = cache[key] {
-            entry.updateLastUsed()
-            cache[key] = entry
-            hits += 1
-            return entry.mask
-        } else {
-            misses += 1
-            return nil
-        }
-    }
-    
-    func set(_ tokens: Set<Int32>, mask: MLXArray) {
-        let key = CacheKey(tokens: tokens)
-        let entry = CacheEntry(mask: mask)
-        
-        // Check if we need to evict entries
-        if cache.count >= maxEntries || currentMemoryUsage + entry.memorySize > maxMemoryBytes {
-            evictLRU()
-        }
-        
-        cache[key] = entry
-        currentMemoryUsage += entry.memorySize
-    }
-    
-    private func evictLRU() {
-        // Find oldest entry
-        guard let oldestKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else {
-            return
-        }
-        
-        if let removedEntry = cache.removeValue(forKey: oldestKey) {
-            currentMemoryUsage -= removedEntry.memorySize
-        }
-    }
-    
-    func clear() {
-        cache.removeAll()
-        currentMemoryUsage = 0
-        hits = 0
-        misses = 0
-    }
-    
-    var hitRate: Double {
-        let total = hits + misses
-        return total > 0 ? Double(hits) / Double(total) : 0.0
-    }
-}
 
 /// TokenTrieベースの制約をLogitProcessorとして実装
 /// JSON生成時にスキーマに定義されたキーのみを物理的に許可する
@@ -122,8 +21,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, @unchecked Sendable 
     private var generatedTokens: [Int32] = []
     private var violationCount: Int = 0
     
-    // Optimized mask cache with LRU eviction
-    private var maskCache: MaskCache
     
     // Soft constraint micro-bias value (small positive bias for schema-preferred tokens)
     private let microBias: Float
@@ -149,7 +46,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, @unchecked Sendable 
             specialTokens: specialTokens,
             includeWhitespace: false
         )
-        self.maskCache = MaskCache()
         self.microBias = microBias
     }
     
@@ -243,22 +139,19 @@ public final class TokenTrieLogitProcessor: LogitProcessor, @unchecked Sendable 
             allow.insert(eos)
         }
         
-        // Get or create cached mask using optimized cache
+        // Create mask using MLX-compatible operations
+        let allowedIndices = Array(allow.filter { $0 >= 0 && $0 < actualVocabSize })
+        
+        // Create mask array - MLX will handle GPU optimization
         let maskArray: MLXArray
-        if let cached = maskCache.get(allow) {
-            maskArray = cached
-        } else {
-            // Create new mask
-            var maskHost = [Float](repeating: 0, count: actualVocabSize)
-            for tokenID in allow {
-                if tokenID >= 0 && tokenID < actualVocabSize {
-                    maskHost[Int(tokenID)] = 1
-                }
+        if !allowedIndices.isEmpty {
+            var mask = [Float](repeating: 0, count: actualVocabSize)
+            for idx in allowedIndices {
+                mask[Int(idx)] = 1
             }
-            maskArray = MLXArray(maskHost)
-            
-            // Cache for future use with LRU eviction
-            maskCache.set(allow, mask: maskArray)
+            maskArray = MLXArray(mask)
+        } else {
+            maskArray = MLX.zeros([actualVocabSize])
         }
         
         // Reshape mask for broadcasting
@@ -282,14 +175,20 @@ public final class TokenTrieLogitProcessor: LogitProcessor, @unchecked Sendable 
         // 最後の次元を語彙サイズとして扱う（形状非依存）
         let actualVocabSize = logits.dim(logits.ndim - 1)
         
-        // Create bias array
-        var biasHost = [Float](repeating: 0.0, count: actualVocabSize)
-        for tokenID in preferredTokens {
-            if tokenID >= 0 && tokenID < actualVocabSize {
-                biasHost[Int(tokenID)] = microBias
+        // Create bias using MLX-compatible operations
+        let preferredIndices = Array(preferredTokens.filter { $0 >= 0 && $0 < actualVocabSize })
+        
+        // Create bias array - MLX will handle GPU optimization
+        let biasArray: MLXArray
+        if !preferredIndices.isEmpty {
+            var biasValues = [Float](repeating: 0, count: actualVocabSize)
+            for idx in preferredIndices {
+                biasValues[Int(idx)] = microBias
             }
+            biasArray = MLXArray(biasValues)
+        } else {
+            biasArray = MLX.zeros([actualVocabSize])
         }
-        let biasArray = MLXArray(biasHost)
         
         // Reshape bias for broadcasting
         var shape = Array(repeating: 1, count: logits.ndim)
@@ -323,8 +222,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, @unchecked Sendable 
         - Generated Tokens: \(generatedTokens.count)
         - Violation Count: \(violationCount)
         - Stack Depth: \(jsonState.stack.count)
-        - Cache Hit Rate: \(String(format: "%.1f", maskCache.hitRate * 100))%
-        - Cache Hits/Misses: \(maskCache.hits)/\(maskCache.misses)
         """
     }
 }

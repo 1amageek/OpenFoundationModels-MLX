@@ -4,6 +4,7 @@ import MLX
 import MLXRandom
 import MLXLLM
 @testable import OpenFoundationModelsMLX
+@testable import PRECISE
 
 @Suite("TokenTrie LogitProcessor Tests")
 struct TokenTrieLogitProcessorTests {

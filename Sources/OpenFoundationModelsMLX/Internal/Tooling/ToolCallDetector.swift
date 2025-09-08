@@ -1,4 +1,5 @@
 import Foundation
+import PRECISE
 import OpenFoundationModels
 
 enum ToolCallDetector {
@@ -100,9 +101,9 @@ enum ToolCallDetector {
             return detectIndividualToolCalls(cleaned)
             
         } catch {
-            // Regex compilation failed, fallback to legacy detection
+            // Regex compilation failed, use simple JSON detection
             Logger.warning("[ToolCallDetector] Regex compilation failed: \(error)")
-            return detectLegacyToolCalls(text)
+            return detectSimpleToolCalls(text)
         }
     }
     
@@ -172,8 +173,8 @@ enum ToolCallDetector {
         }
     }
     
-    /// Legacy fallback detection method for when regex fails
-    private static func detectLegacyToolCalls(_ text: String) -> Transcript.Entry? {
+    /// Simple fallback detection method for when regex fails
+    private static func detectSimpleToolCalls(_ text: String) -> Transcript.Entry? {
         // Get all top-level JSON objects using JSONUtils
         let objects = JSONUtils.allTopLevelObjects(in: text)
         

@@ -1,4 +1,5 @@
 import Foundation
+import PRECISE
 import MLX
 import MLXLMCommon
 import MLXLLM
@@ -90,9 +91,6 @@ actor MLXBackend {
             let input = try await context.processor.prepare(input: userInput)
             
             // Configure generation parameters
-            // NOTE: This sampling-based path is kept for backward compatibility
-            // with non-card flows. Card-driven flows pass `GenerateParameters`
-            // explicitly via the `parameters` field and avoid implicit defaults.
             let parameters = GenerateParameters(
                 maxTokens: sampling.maxTokens ?? 1024,
                 temperature: Float(sampling.temperature ?? 0.7),

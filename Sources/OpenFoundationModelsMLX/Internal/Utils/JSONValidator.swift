@@ -1,5 +1,5 @@
 import Foundation
-
+import PRECISE
 /// Unified JSON validation used by engine/backend.
 /// - Extracts the first top-level JSON object from text
 /// - Optionally applies Schema Snap

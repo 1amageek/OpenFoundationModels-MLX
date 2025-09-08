@@ -2,8 +2,8 @@ import Foundation
 
 // Simple logging utility for OpenFoundationModels-MLX
 // Controls verbose debug output based on environment variable or debug flag
-enum Logger {
-    enum Level: Int {
+public enum Logger {
+    public enum Level: Int {
         case none = 0
         case error = 1
         case warning = 2
@@ -14,7 +14,7 @@ enum Logger {
     
     // Check environment variable for log level
     // Set OPENMODELS_LOG_LEVEL=debug for debug logging
-    private static let logLevel: Level = {
+    nonisolated(unsafe) private static let logLevel: Level = {
         if let env = ProcessInfo.processInfo.environment["OPENMODELS_LOG_LEVEL"] {
             switch env.lowercased() {
             case "none": return .none
@@ -39,31 +39,31 @@ enum Logger {
         }
     }()
     
-    static func error(_ message: String, file: String = #file, function: String = #function) {
+    public static func error(_ message: String, file: String = #file, function: String = #function) {
         if logLevel.rawValue >= Level.error.rawValue {
             print("[ERROR] \(message)")
         }
     }
     
-    static func warning(_ message: String, file: String = #file, function: String = #function) {
+    public static func warning(_ message: String, file: String = #file, function: String = #function) {
         if logLevel.rawValue >= Level.warning.rawValue {
             print("[WARNING] \(message)")
         }
     }
     
-    static func info(_ message: String, file: String = #file, function: String = #function) {
+    public static func info(_ message: String, file: String = #file, function: String = #function) {
         if logLevel.rawValue >= Level.info.rawValue {
             print("[INFO] \(message)")
         }
     }
     
-    static func debug(_ message: String, file: String = #file, function: String = #function) {
+    public static func debug(_ message: String, file: String = #file, function: String = #function) {
         if logLevel.rawValue >= Level.debug.rawValue {
             print("[DEBUG] \(message)")
         }
     }
     
-    static func verbose(_ message: String, file: String = #file, function: String = #function) {
+    public static func verbose(_ message: String, file: String = #file, function: String = #function) {
         if logLevel.rawValue >= Level.verbose.rawValue {
             print("[VERBOSE] \(message)")
         }

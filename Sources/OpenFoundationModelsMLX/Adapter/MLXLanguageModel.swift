@@ -1,4 +1,5 @@
 import Foundation
+import PRECISE
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 import MLXLMCommon

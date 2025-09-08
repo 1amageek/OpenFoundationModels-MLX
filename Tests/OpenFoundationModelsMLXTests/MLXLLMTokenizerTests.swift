@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import Tokenizers
 @testable import OpenFoundationModelsMLX
+@testable import PRECISE
 
 @Suite("MLXLLM Tokenizer Tests")
 struct MLXLLMTokenizerTests {
