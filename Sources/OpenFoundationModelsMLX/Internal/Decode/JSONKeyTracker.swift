@@ -4,9 +4,9 @@ import Foundation
 // key cannot possibly match any schema property name. This enables early abort
 // and retry without exposing a broken attempt to the outer API.
 struct JSONKeyTracker: Sendable {
-    private let schemaKeys: [String]
     private let trie: KeyTrie
     private var lastNonWS: Character = "{"
+    private var prevNonWS: Character = "{"
     private(set) var readingKey = false
     private(set) var expectingColon = false
     private(set) var keyBuffer = ""
@@ -15,21 +15,23 @@ struct JSONKeyTracker: Sendable {
     private(set) var violationCount = 0
 
     init(schemaKeys: [String]) {
-        self.schemaKeys = schemaKeys
         self.trie = KeyTrie(keys: schemaKeys)
     }
 
     mutating func consume(_ chunk: String) {
         for ch in chunk {
             let isWS = ch.isWhitespace
-            if !isWS { lastNonWS = ch }
+            if !isWS {
+                // 更新は最後に。直前の非WSを保持しておく
+                prevNonWS = lastNonWS
+            }
 
             // handle string escapes
             if ch == "\\" && inString { escaped.toggle(); continue }
 
             if ch == "\"" && !escaped {
                 inString.toggle()
-                if !readingKey && (lastNonWS == "{" || lastNonWS == ",") {
+                if !readingKey && (prevNonWS == "{" || prevNonWS == ",") {
                     // Potentially a key start
                     readingKey = true
                     keyBuffer.removeAll(keepingCapacity: true)
@@ -52,6 +54,7 @@ struct JSONKeyTracker: Sendable {
             }
 
             escaped = false
+            if !isWS { lastNonWS = ch }
         }
     }
 }

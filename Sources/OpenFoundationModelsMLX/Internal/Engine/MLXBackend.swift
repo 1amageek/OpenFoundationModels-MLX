@@ -90,8 +90,11 @@ actor MLXBackend {
             let input = try await context.processor.prepare(input: userInput)
             
             // Configure generation parameters
+            // NOTE: This sampling-based path is kept for backward compatibility
+            // with non-card flows. Card-driven flows pass `GenerateParameters`
+            // explicitly via the `parameters` field and avoid implicit defaults.
             let parameters = GenerateParameters(
-                maxTokens: sampling.maxTokens,
+                maxTokens: sampling.maxTokens ?? 1024,
                 temperature: Float(sampling.temperature ?? 0.7),
                 topP: Float(sampling.topP ?? 1.0)
             )
@@ -140,8 +143,9 @@ actor MLXBackend {
             )
             
             // Configure generation parameters
+            // See note above regarding card vs. sampling flows.
             let parameters = GenerateParameters(
-                maxTokens: sampling.maxTokens,
+                maxTokens: sampling.maxTokens ?? 1024,
                 temperature: Float(sampling.temperature ?? 0.7),
                 topP: Float(sampling.topP ?? 1.0)
             )
@@ -180,12 +184,56 @@ actor MLXBackend {
             return result
         }
     }
+
+    // Constrained generation using explicit GenerateParameters from ModelCard
+    func generateTextConstrained(
+        prompt: String,
+        parameters: GenerateParameters,
+        schema: SchemaMeta
+    ) async throws -> String {
+        guard let container = currentModelContainer else {
+            throw MLXBackendError.noModelLoaded
+        }
+        return try await container.perform { (context: ModelContext) async throws -> String in
+            let userInput = UserInput(prompt: .text(prompt))
+            let input = try await context.processor.prepare(input: userInput)
+
+            // Setup constraints processor
+            let constraintProcessor = TokenTrieLogitProcessor(
+                schema: schema,
+                tokenizer: context.tokenizer
+            )
+
+            // Create custom token iterator with constraint processor and provided parameters
+            let sampler = parameters.sampler()
+            let iterator = try TokenIterator(
+                input: input,
+                model: context.model,
+                cache: nil,
+                processor: constraintProcessor,
+                sampler: sampler,
+                prefillStepSize: parameters.prefillStepSize,
+                maxTokens: parameters.maxTokens
+            )
+
+            var result = ""
+            let stream = MLXLMCommon.generate(
+                input: input,
+                context: context,
+                iterator: iterator
+            )
+            for await generation in stream {
+                if case .chunk(let text) = generation { result += text }
+            }
+            return result
+        }
+    }
     
     // MARK: - Streaming Generation
     
     func streamText(prompt: String, sampling: SamplingParameters) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 guard let container = currentModelContainer else {
                     continuation.finish(throwing: MLXBackendError.noModelLoaded)
                     return
@@ -195,8 +243,9 @@ actor MLXBackend {
                     try await container.perform { (context: ModelContext) async throws in
                         let userInput = UserInput(prompt: .text(prompt))
                         let input = try await context.processor.prepare(input: userInput)
+                        // See note above regarding card vs. sampling flows.
                         let parameters = GenerateParameters(
-                            maxTokens: sampling.maxTokens,
+                            maxTokens: sampling.maxTokens ?? 1024,
                             temperature: Float(sampling.temperature ?? 0.7),
                             topP: Float(sampling.topP ?? 1.0)
                         )
@@ -208,6 +257,9 @@ actor MLXBackend {
                         )
                         
                         for await generation in stream {
+                            if Task.isCancelled {
+                                break
+                            }
                             if case .chunk(let text) = generation {
                                 continuation.yield(text)
                             }
@@ -216,8 +268,13 @@ actor MLXBackend {
                         continuation.finish()
                     }
                 } catch {
-                    continuation.finish(throwing: error)
+                    if !Task.isCancelled {
+                        continuation.finish(throwing: error)
+                    }
                 }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }
@@ -228,7 +285,7 @@ actor MLXBackend {
         schema: SchemaMeta
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 guard let container = currentModelContainer else {
                     continuation.finish(throwing: MLXBackendError.noModelLoaded)
                     return
@@ -246,8 +303,9 @@ actor MLXBackend {
                         )
                         
                         // Configure generation parameters
+                        // See note above regarding card vs. sampling flows.
                         let parameters = GenerateParameters(
-                            maxTokens: sampling.maxTokens,
+                            maxTokens: sampling.maxTokens ?? 1024,
                             temperature: Float(sampling.temperature ?? 0.7),
                             topP: Float(sampling.topP ?? 1.0)
                         )
@@ -272,6 +330,9 @@ actor MLXBackend {
                         )
                         
                         for await generation in stream {
+                            if Task.isCancelled {
+                                break
+                            }
                             if case .chunk(let text) = generation {
                                 continuation.yield(text)
                             }
@@ -280,8 +341,68 @@ actor MLXBackend {
                         continuation.finish()
                     }
                 } catch {
-                    continuation.finish(throwing: error)
+                    if !Task.isCancelled {
+                        continuation.finish(throwing: error)
+                    }
                 }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    func streamTextConstrained(
+        prompt: String,
+        parameters: GenerateParameters,
+        schema: SchemaMeta
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                guard let container = currentModelContainer else {
+                    continuation.finish(throwing: MLXBackendError.noModelLoaded)
+                    return
+                }
+                do {
+                    try await container.perform { (context: ModelContext) async throws in
+                        let userInput = UserInput(prompt: .text(prompt))
+                        let input = try await context.processor.prepare(input: userInput)
+
+                        let constraintProcessor = TokenTrieLogitProcessor(
+                            schema: schema,
+                            tokenizer: context.tokenizer
+                        )
+                        let sampler = parameters.sampler()
+                        let iterator = try TokenIterator(
+                            input: input,
+                            model: context.model,
+                            cache: nil,
+                            processor: constraintProcessor,
+                            sampler: sampler,
+                            prefillStepSize: parameters.prefillStepSize,
+                            maxTokens: parameters.maxTokens
+                        )
+                        let stream = MLXLMCommon.generate(
+                            input: input,
+                            context: context,
+                            iterator: iterator
+                        )
+                        for await gen in stream {
+                            if Task.isCancelled {
+                                break
+                            }
+                            if case .chunk(let text) = gen { continuation.yield(text) }
+                        }
+                        continuation.finish()
+                    }
+                } catch {
+                    if !Task.isCancelled {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }
@@ -290,7 +411,65 @@ actor MLXBackend {
 // MARK: - Extensions
 
 extension MLXBackend {
+    // Direct parameterized generation (ModelCard provided parameters). MLX does not modify or fallback.
+    func generateText(prompt: String, parameters: GenerateParameters) async throws -> String {
+        guard let container = currentModelContainer else {
+            throw MLXBackendError.noModelLoaded
+        }
+        return try await container.perform { (context: ModelContext) async throws -> String in
+            let userInput = UserInput(prompt: .text(prompt))
+            let input = try await context.processor.prepare(input: userInput)
+            var result = ""
+            let stream = try MLXLMCommon.generate(
+                input: input,
+                parameters: parameters,
+                context: context
+            )
+            for await generation in stream {
+                if case .chunk(let text) = generation { result += text }
+            }
+            return result
+        }
+    }
+
+    func streamText(prompt: String, parameters: GenerateParameters) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                guard let container = currentModelContainer else {
+                    continuation.finish(throwing: MLXBackendError.noModelLoaded)
+                    return
+                }
+                do {
+                    try await container.perform { (context: ModelContext) async throws in
+                        let userInput = UserInput(prompt: .text(prompt))
+                        let input = try await context.processor.prepare(input: userInput)
+                        let stream = try MLXLMCommon.generate(
+                            input: input,
+                            parameters: parameters,
+                            context: context
+                        )
+                        for await gen in stream {
+                            if Task.isCancelled {
+                                break
+                            }
+                            if case .chunk(let text) = gen { continuation.yield(text) }
+                        }
+                        continuation.finish()
+                    }
+                } catch {
+                    if !Task.isCancelled {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
     /// Generate with automatic retry on schema violations
+    /// Uses temperature variation strategy: increases temperature slightly on each retry
+    /// to encourage different outputs while maintaining coherence
     func generateTextConstrainedWithRetry(
         prompt: String,
         sampling: SamplingParameters,
@@ -299,11 +478,24 @@ extension MLXBackend {
     ) async throws -> String {
         var lastError: Error?
         
+        // Base temperature for variation strategy
+        let baseTemperature = sampling.temperature ?? 0.7
+        let temperatureIncrement = 0.1  // Increase by 0.1 each retry
+        
         for attempt in 1...maxRetries {
+            // Vary temperature on retry (but not if seed is set for deterministic generation)
+            var adjustedSampling = sampling
+            if sampling.seed == nil && attempt > 1 {
+                // Increase temperature slightly to encourage variation
+                let newTemp = min(baseTemperature + Double(attempt - 1) * temperatureIncrement, 1.5)
+                adjustedSampling.temperature = newTemp
+                Logger.debug("[MLXBackend] Retry \(attempt) with temperature: \(newTemp)")
+            }
+            
             do {
                 let result = try await generateTextConstrained(
                     prompt: prompt,
-                    sampling: sampling,
+                    sampling: adjustedSampling,
                     schema: schema
                 )
                 
@@ -317,6 +509,11 @@ extension MLXBackend {
             } catch {
                 Logger.warning("[MLXBackend] Attempt \(attempt) failed: \(error.localizedDescription)")
                 lastError = error
+                
+                // Don't retry on certain terminal errors
+                if error is CancellationError {
+                    throw error
+                }
             }
         }
         
@@ -324,27 +521,8 @@ extension MLXBackend {
     }
     
     private func validateJSON(_ text: String, schema: SchemaMeta) -> Bool {
-        // Try to parse as JSON
-        guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        
-        // Check required keys
-        for requiredKey in schema.required {
-            if json[requiredKey] == nil {
-                return false
-            }
-        }
-        
-        // Check all keys are in schema
-        for key in json.keys {
-            if !schema.keys.contains(key) {
-                return false
-            }
-        }
-        
-        return true
+        // Use unified validator (Snap enabled, extra keys disallowed)
+        JSONValidator(allowExtraKeys: false, enableSnap: true).validate(text: text, schema: schema)
     }
 }
 

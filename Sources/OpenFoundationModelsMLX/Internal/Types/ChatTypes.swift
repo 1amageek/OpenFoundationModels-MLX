@@ -1,4 +1,5 @@
 import Foundation
+import MLXLMCommon
 
 // Internal chat-style types used by the MLXChatEngine.
 // These types are not exported as public API; they support the internal
@@ -29,8 +30,6 @@ struct SamplingParameters: Codable, Sendable {
 }
 
 struct ChatPolicy: Codable, Sendable {
-    var enableSCD: Bool = true // schema-constrained decoding
-    var enableSnap: Bool = true // schema snap post-processing
     var retryMaxTries: Int = 2
 }
 
@@ -41,6 +40,10 @@ struct ChatRequest: Sendable {
     let sampling: SamplingParameters
     let policy: ChatPolicy
     let schema: SchemaMeta?
+    // If provided, the prompt string is used as-is.
+    let promptOverride: String?
+    // If provided, backend should use these parameters as-is.
+    let parameters: GenerateParameters?
 }
 
 struct ChatChoice: Sendable {

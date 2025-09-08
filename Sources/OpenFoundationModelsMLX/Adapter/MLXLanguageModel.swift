@@ -1,17 +1,19 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
+import MLXLMCommon
 
 // MLXLanguageModel is the provider adapter that conforms to the
 // OpenFoundationModels LanguageModel protocol, delegating core work to the
 // internal MLXChatEngine. The public API surface remains 100% compatible.
-public struct MLXLanguageModel: LanguageModel, Sendable {
-    private let modelID: String
+public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
+    private let card: any ModelCard
     private let engine: MLXChatEngine
 
-    public init(modelID: String) async throws {
-        self.modelID = modelID
-        self.engine = try await MLXChatEngine(modelID: modelID)
+    /// Initialize with a ModelCard. The card fully defines prompt rendering and default parameters.
+    public init(card: any ModelCard) async throws {
+        self.card = card
+        self.engine = try await MLXChatEngine(modelID: card.id)
     }
 
     public var isAvailable: Bool { true }
@@ -19,7 +21,7 @@ public struct MLXLanguageModel: LanguageModel, Sendable {
     public func supports(locale: Locale) -> Bool { true }
 
     public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
-        let req = PromptRenderer.buildRequest(modelID: modelID, transcript: transcript, options: options)
+        let req = try PromptRenderer.buildRequest(card: card, transcript: transcript, options: options)
         do {
             let res = try await engine.generate(req)
             // Convert the assistant text into a Transcript.Entry.response in a
@@ -30,8 +32,14 @@ public struct MLXLanguageModel: LanguageModel, Sendable {
                 }
                 return .response(.init(assetIDs: [], segments: [.text(.init(content: text))]))
             }
+        } catch let error as CancellationError {
+            // Rethrow cancellation errors without wrapping
+            throw error
+        } catch let error as MLXBackendError {
+            // Map backend errors with more detail
+            throw GenerationError.decodingFailure(.init(debugDescription: "Backend error: \(error.localizedDescription)"))
         } catch {
-            // Map internal errors onto the public GenerationError surface.
+            // Map other internal errors onto the public GenerationError surface
             throw GenerationError.decodingFailure(.init(debugDescription: String(describing: error)))
         }
         // If no content was produced, surface a decoding failure consistent with
@@ -40,15 +48,26 @@ public struct MLXLanguageModel: LanguageModel, Sendable {
     }
 
     public func stream(transcript: Transcript, options: GenerationOptions?) -> AsyncStream<Transcript.Entry> {
-        let req = PromptRenderer.buildRequest(modelID: modelID, transcript: transcript, options: options)
+        // Fail-fast: if request building fails, emit a single error entry and finish.
+        guard let req = try? PromptRenderer.buildRequest(card: card, transcript: transcript, options: options) else {
+            return AsyncStream { continuation in
+                continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: "[Error] Prompt rendering failed"))])))
+                continuation.finish()
+            }
+        }
         let expectsTool = TranscriptAccess.extract(from: transcript).toolDefs.isEmpty == false
         return AsyncStream { continuation in
-            Task {
+            let task = Task {
                 let stream = await engine.stream(req)
                 do {
                     var buffer = ""
                     var emittedToolCalls = false
                     for try await chunk in stream {
+                        // Check for task cancellation
+                        if Task.isCancelled {
+                            break
+                        }
+                        
                         // Yield text deltas as response segments (not accumulated)
                         for delta in chunk.deltas {
                             if let text = delta.deltaText, !text.isEmpty {
@@ -82,13 +101,18 @@ public struct MLXLanguageModel: LanguageModel, Sendable {
                     // Log error since AsyncStream cannot propagate errors
                     Logger.error("[MLXLanguageModel] Stream error: \(error)")
                     
-                    // If possible, send an error indicator as text
-                    // This helps the client know an error occurred
-                    let errorMessage = "[Error: \(error.localizedDescription)]"
+                    // Send error indicator with consistent format
+                    // Prefix with [Error] for clear identification
+                    let errorMessage = "[Error] Stream generation failed: \(error.localizedDescription)"
                     continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: errorMessage))])))
                     
                     continuation.finish()
                 }
+            }
+            
+            // Set up cancellation handler
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }

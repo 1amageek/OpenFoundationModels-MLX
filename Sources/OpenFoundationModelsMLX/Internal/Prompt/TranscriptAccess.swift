@@ -2,8 +2,8 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 
-// OpenFoundationModelsExtra を用いた強型アクセスで Transcript から
-// プロンプト構築に必要な情報を抽出する。
+// Extract information needed for prompt construction from Transcript
+// using strongly-typed access via OpenFoundationModelsExtra.
 enum TranscriptAccess {
     struct Extracted: Sendable {
         var systemText: String?
@@ -24,7 +24,7 @@ enum TranscriptAccess {
             }
         }
 
-        // 2) 履歴（user/assistant）と schema（直近promptのもの）
+        // 2) History (user/assistant) and schema (from most recent prompt)
         var lastPromptRF: Transcript.ResponseFormat? = nil
         for e in transcript {
             switch e {

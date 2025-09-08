@@ -160,14 +160,34 @@ enum TokenTrieBuilder {
     }
     
     static func buildCached(schema: SchemaMeta, tokenizer: TokenizerAdapter, tokenizerID: String? = nil) -> TokenTrie {
-        // Include tokenizer identity in the cache key to prevent cross-model Trie reuse
-        let tokenizerFingerprint = tokenizerID ?? String(describing: type(of: tokenizer))
-        let fingerprint = tokenizerFingerprint + "||" + schema.keys.sorted().joined(separator: "|")
+        // Build comprehensive fingerprint to prevent cross-tokenizer cache reuse
+        var fingerprintComponents: [String] = []
+        
+        // 1. Tokenizer fingerprint (if MLXLLMTokenizer, use its fingerprint method)
+        if let mlxTokenizer = tokenizer as? MLXLLMTokenizer {
+            fingerprintComponents.append(mlxTokenizer.getFingerprint())
+        } else {
+            // Fallback for other tokenizer types
+            let tokenizerFP = tokenizerID ?? String(describing: type(of: tokenizer))
+            fingerprintComponents.append(tokenizerFP)
+        }
+        
+        // 2. Schema keys (sorted for consistency)
+        let schemaFP = schema.keys.sorted().joined(separator: "|")
+        fingerprintComponents.append("schema=\(schemaFP)")
+        
+        // 3. Required keys (affects constraint behavior)
+        let requiredFP = schema.required.sorted().joined(separator: "|")
+        fingerprintComponents.append("required=\(requiredFP)")
+        
+        let fingerprint = fingerprintComponents.joined(separator: "||")
         
         if let cached = cache.get(fingerprint) {
+            Logger.debug("[TokenTrieBuilder] Cache hit for fingerprint: \(fingerprint.prefix(100))...")
             return cached
         }
         
+        Logger.debug("[TokenTrieBuilder] Cache miss, building new trie for fingerprint: \(fingerprint.prefix(100))...")
         let trie = build(from: schema, tokenizer: tokenizer)
         cache.set(fingerprint, trie)
         return trie

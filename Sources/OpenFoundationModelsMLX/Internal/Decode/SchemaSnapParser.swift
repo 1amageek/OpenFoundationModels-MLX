@@ -9,9 +9,38 @@ enum SchemaSnapParser {
         s.lowercased().replacingOccurrences(of: "_", with: "").replacingOccurrences(of: "-", with: "")
     }
 
-    static func snapKey(_ key: String, against schemaKeys: [String]) -> String? {
+    static func snapKey(_ key: String, against schemaKeys: [String], required: [String] = []) -> String? {
         let nk = normalize(key)
-        let normalizedMap = Dictionary(uniqueKeysWithValues: schemaKeys.map { (normalize($0), $0) })
+        
+        // Build normalized map with collision handling
+        var normalizedMap: [String: String] = [:]
+        for original in schemaKeys {
+            let normalized = normalize(original)
+            
+            if let existing = normalizedMap[normalized] {
+                // Collision detected - apply resolution priority
+                let isNewRequired = required.contains(original)
+                let isExistingRequired = required.contains(existing)
+                
+                // Priority: required > shorter > alphabetical
+                if isNewRequired && !isExistingRequired {
+                    normalizedMap[normalized] = original
+                } else if !isNewRequired && isExistingRequired {
+                    // Keep existing required key
+                    continue
+                } else if original.count < existing.count {
+                    // Prefer shorter key
+                    normalizedMap[normalized] = original
+                } else if original.count == existing.count && original < existing {
+                    // Same length - use alphabetical order for consistency
+                    normalizedMap[normalized] = original
+                }
+                // Otherwise keep existing
+            } else {
+                normalizedMap[normalized] = original
+            }
+        }
+        
         if let exact = normalizedMap[nk] { return exact }
 
         // Distance-1 heuristic
