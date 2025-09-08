@@ -1,32 +1,51 @@
 import Foundation
-import PRECISE
 import MLX
 import MLXLMCommon
 import MLXLLM
 import Tokenizers
 import Hub
+import Darwin
+
+// Cache wrapper to handle Sendable requirements
+private final class ModelCacheWrapper: @unchecked Sendable {
+    let cache = NSCache<NSString, AnyObject>()
+}
 
 // MLXBackend integrates with MLXLLM to provide constrained text generation
 // using TokenTrie-based Schema-Constrained Decoding (SCD)
 actor MLXBackend {
-    // Model management
-    private var modelCache = NSCache<NSString, AnyObject>()
+    // Memory size helpers
+    public enum MemorySize {
+        public static func MB(_ value: Int) -> Int {
+            return value * 1024 * 1024
+        }
+        
+        public static func GB(_ value: Int) -> Int {
+            return value * 1024 * 1024 * 1024
+        }
+    }
+    
+    // Model management - shared across all instances for efficiency
+    private static let modelCacheWrapper = ModelCacheWrapper()
     private var currentModelContainer: ModelContainer?
     private var currentModelID: String?
     private let hubApi: HubApi
     
-    // Initialize with optional model ID for auto-loading
-    init(modelID: String? = nil) async throws {
+    // Initialize with required model ID
+    // maxCacheMemory: Maximum cache memory in bytes (default: 2GB)
+    init(modelID: String, maxCacheMemory: Int = MemorySize.GB(2)) async throws {
         // Use the default Hub API which manages downloads to ~/Library/Caches/huggingface
         self.hubApi = HubApi()
+        self.currentModelID = modelID
         
-        // Configure cache limits
-        modelCache.countLimit = 3  // Keep max 3 models in memory
-        
-        // Load initial model if provided
-        if let modelID = modelID {
-            try await loadModel(modelID)
+        // Configure cache limits (one-time setup)
+        if MLXBackend.modelCacheWrapper.cache.countLimit == 0 {
+            MLXBackend.modelCacheWrapper.cache.countLimit = 3  // Keep max 3 models in memory
+            MLXBackend.modelCacheWrapper.cache.totalCostLimit = maxCacheMemory  // Set memory limit in bytes
         }
+        
+        // Load the model
+        try await loadModel(modelID)
     }
     
     // MARK: - Model Management
@@ -36,7 +55,7 @@ actor MLXBackend {
         let cacheKey = modelID as NSString
         
         // Check memory cache first
-        if let cached = modelCache.object(forKey: cacheKey) as? ModelContainer {
+        if let cached = MLXBackend.modelCacheWrapper.cache.object(forKey: cacheKey) as? ModelContainer {
             currentModelContainer = cached
             currentModelID = modelID
             Logger.debug("[MLXBackend] Using cached model: \(modelID)")
@@ -60,8 +79,10 @@ actor MLXBackend {
             }
         }
         
-        // Store in cache and set as current
-        modelCache.setObject(container as AnyObject, forKey: cacheKey)
+        // Store in cache with a fixed cost - NSCache will respect totalCostLimit
+        // Using 1GB as default cost per model for simplicity
+        let modelCost = 1024 * 1024 * 1024  // 1GB per model
+        MLXBackend.modelCacheWrapper.cache.setObject(container as AnyObject, forKey: cacheKey, cost: modelCost)
         currentModelContainer = container
         currentModelID = modelID
         Logger.info("[MLXBackend] Model loaded successfully: \(modelID)")
@@ -78,10 +99,70 @@ actor MLXBackend {
         return currentModelID != nil ? [currentModelID!] : []
     }
     
+    /// Unload a specific model or the current model from memory
+    public func unloadModel(_ modelID: String? = nil) async {
+        let targetID = modelID ?? currentModelID
+        guard let id = targetID else {
+            Logger.debug("[MLXBackend] No model to unload")
+            return
+        }
+        
+        // Remove from cache
+        MLXBackend.modelCacheWrapper.cache.removeObject(forKey: id as NSString)
+        Logger.info("[MLXBackend] Unloaded model from cache: \(id)")
+        
+        // Clear current references if it's the active model
+        if id == currentModelID {
+            currentModelContainer = nil
+            currentModelID = nil
+            Logger.info("[MLXBackend] Cleared current model references")
+        }
+    }
+    
+    /// Clear all models from memory
+    public func clearAllModels() async {
+        MLXBackend.modelCacheWrapper.cache.removeAllObjects()
+        currentModelContainer = nil
+        currentModelID = nil
+        Logger.info("[MLXBackend] Cleared all models from memory")
+    }
+    
+    /// Check memory pressure and automatically unload models if needed
+    public func handleMemoryPressure(maxResidentBytes: UInt64 = 1_500_000_000) async {
+        let rss = currentResidentMemory()
+        
+        if rss > maxResidentBytes {
+            Logger.warning("[MLXBackend] High process RSS \(rss) > \(maxResidentBytes). Trimming cache.")
+            
+            // Keep only the current model, clear others
+            if currentModelID != nil {
+                // NSCache will handle eviction, but we force clear for immediate effect
+                MLXBackend.modelCacheWrapper.cache.countLimit = 1
+            } else {
+                await clearAllModels()
+            }
+        }
+    }
+    
+    /// Get current process resident memory in bytes
+    private func currentResidentMemory() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        
+        let kerr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        
+        return kerr == KERN_SUCCESS ? UInt64(info.resident_size) : 0
+    }
+    
     // MARK: - Text Generation
     
     func generateText(prompt: String, sampling: SamplingParameters) async throws -> String {
         guard let container = currentModelContainer else {
+            await sharedMetrics.recordError(MLXBackendError.noModelLoaded)
             throw MLXBackendError.noModelLoaded
         }
         
@@ -129,16 +210,72 @@ actor MLXBackend {
             throw MLXBackendError.noModelLoaded
         }
         
+        // Retry logic with exponential backoff
+        let maxAttempts = 3
+        var lastError: Error?
+        let baseDelay: UInt64 = 100_000_000 // 100ms in nanoseconds
+        
+        for attempt in 1...maxAttempts {
+            // Apply exponential backoff delay (except on first attempt)
+            if attempt > 1 {
+                let delay = baseDelay * UInt64(1 << (attempt - 2)) // 100ms, 200ms, 400ms...
+                try await Task.sleep(nanoseconds: min(delay, 2_000_000_000)) // Cap at 2 seconds
+                Logger.debug("[MLXBackend] Retry attempt \(attempt) after \(delay / 1_000_000)ms delay")
+            }
+            
+            do {
+                let result = try await attemptConstrainedGeneration(
+                    prompt: prompt,
+                    sampling: sampling,
+                    schema: schema,
+                    container: container
+                )
+                
+                // Validate the result
+                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
+                if validator.validate(text: result, schema: schema) {
+                    Logger.info("[MLXBackend] Valid JSON generated on attempt \(attempt)")
+                    return result
+                } else {
+                    lastError = JSONGenerationError.schemaViolation(
+                        reason: "Generated JSON does not match schema"
+                    )
+                    Logger.warning("[MLXBackend] Schema validation failed on attempt \(attempt)")
+                }
+                
+            } catch let error as JSONGenerationError {
+                // Early detection - retry with backoff
+                Logger.warning("[MLXBackend] Generation aborted on attempt \(attempt): \(error)")
+                lastError = error
+            } catch {
+                // Other errors
+                Logger.error("[MLXBackend] Unexpected error on attempt \(attempt): \(error)")
+                lastError = error
+            }
+        }
+        
+        throw lastError ?? JSONGenerationError.schemaViolation(
+            reason: "Failed to generate valid JSON after \(maxAttempts) attempts"
+        )
+    }
+    
+    private func attemptConstrainedGeneration(
+        prompt: String,
+        sampling: SamplingParameters,
+        schema: SchemaMeta,
+        container: ModelContainer
+    ) async throws -> String {
         return try await container.perform { (context: ModelContext) async throws -> String in
             // Prepare input
             let userInput = UserInput(prompt: .text(prompt))
             let input = try await context.processor.prepare(input: userInput)
             
-            // Create constrained logit processor
+            // Create constrained logit processor and clear any previous errors
             let constraintProcessor = TokenTrieLogitProcessor(
                 schema: schema,
                 tokenizer: context.tokenizer
             )
+            constraintProcessor.clearError()
             
             // Configure generation parameters
             // See note above regarding card vs. sampling flows.
@@ -160,23 +297,46 @@ actor MLXBackend {
                 maxTokens: parameters.maxTokens
             )
             
-            // Generate with constraints using the custom iterator
-            var result = ""
-            let stream = MLXLMCommon.generate(
+            // Create base generation stream
+            let baseStream = MLXLMCommon.generate(
                 input: input,
                 context: context,
                 iterator: iterator
             )
             
-            for await generation in stream {
+            // Wrap with AbortableGenerator for error polling
+            let abortableGen = AbortableGenerator(processor: constraintProcessor)
+            let stream = abortableGen.generate(baseStream: baseStream)
+            
+            // Generate with immediate abort on errors
+            var result = ""
+            var tokenCount = 0
+            
+            for try await generation in stream {
                 switch generation {
                 case .chunk(let text):
                     result += text
+                    tokenCount += 1
+                    
+                    // Additional safety check every few tokens
+                    if tokenCount % 5 == 0 && constraintProcessor.hasError() {
+                        let error = constraintProcessor.getLastError()!
+                        Logger.warning("[MLXBackend] Error detected after \(tokenCount) tokens: \(error)")
+                        throw error
+                    }
+                    
                 case .info(let info):
-                    Logger.debug("[MLXBackend] Constrained generation complete: \(info.tokensPerSecond) tokens/s")
+                    Logger.debug("[MLXBackend] Constrained generation: \(info.tokensPerSecond) tokens/s")
+                    
                 case .toolCall:
                     break
                 }
+            }
+            
+            // Final error check
+            if let error = constraintProcessor.getLastError() {
+                Logger.warning("[MLXBackend] Final error check failed: \(error)")
+                throw error
             }
             
             return result
@@ -192,15 +352,70 @@ actor MLXBackend {
         guard let container = currentModelContainer else {
             throw MLXBackendError.noModelLoaded
         }
+        
+        // Retry logic with exponential backoff
+        let maxAttempts = 3
+        var lastError: Error?
+        let baseDelay: UInt64 = 100_000_000 // 100ms in nanoseconds
+        
+        for attempt in 1...maxAttempts {
+            // Apply exponential backoff delay (except on first attempt)
+            if attempt > 1 {
+                let delay = baseDelay * UInt64(1 << (attempt - 2)) // 100ms, 200ms, 400ms...
+                try await Task.sleep(nanoseconds: min(delay, 2_000_000_000)) // Cap at 2 seconds
+                Logger.debug("[MLXBackend] Retry attempt \(attempt) after \(delay / 1_000_000)ms delay")
+            }
+            
+            do {
+                let result = try await attemptConstrainedGenerationWithParams(
+                    prompt: prompt,
+                    parameters: parameters,
+                    schema: schema,
+                    container: container
+                )
+                
+                // Validate the result
+                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
+                if validator.validate(text: result, schema: schema) {
+                    Logger.info("[MLXBackend] Valid JSON generated on attempt \(attempt)")
+                    return result
+                } else {
+                    lastError = JSONGenerationError.schemaViolation(
+                        reason: "Generated JSON does not match schema"
+                    )
+                    Logger.warning("[MLXBackend] Schema validation failed on attempt \(attempt)")
+                }
+                
+            } catch let error as JSONGenerationError {
+                Logger.warning("[MLXBackend] Generation aborted on attempt \(attempt): \(error)")
+                lastError = error
+            } catch {
+                Logger.error("[MLXBackend] Unexpected error on attempt \(attempt): \(error)")
+                lastError = error
+            }
+        }
+        
+        throw lastError ?? JSONGenerationError.schemaViolation(
+            reason: "Failed to generate valid JSON after \(maxAttempts) attempts"
+        )
+    }
+    
+    private func attemptConstrainedGenerationWithParams(
+        prompt: String,
+        parameters: GenerateParameters,
+        schema: SchemaMeta,
+        container: ModelContainer
+    ) async throws -> String {
         return try await container.perform { (context: ModelContext) async throws -> String in
             let userInput = UserInput(prompt: .text(prompt))
             let input = try await context.processor.prepare(input: userInput)
 
-            // Setup constraints processor
+            // Setup constraints processor with error clearing
             let constraintProcessor = TokenTrieLogitProcessor(
                 schema: schema,
                 tokenizer: context.tokenizer
             )
+            constraintProcessor.clearError()
 
             // Create custom token iterator with constraint processor and provided parameters
             let sampler = parameters.sampler()
@@ -214,15 +429,28 @@ actor MLXBackend {
                 maxTokens: parameters.maxTokens
             )
 
-            var result = ""
-            let stream = MLXLMCommon.generate(
+            // Create base stream and wrap with AbortableGenerator
+            let baseStream = MLXLMCommon.generate(
                 input: input,
                 context: context,
                 iterator: iterator
             )
-            for await generation in stream {
-                if case .chunk(let text) = generation { result += text }
+            
+            let abortableGen = AbortableGenerator(processor: constraintProcessor)
+            let stream = abortableGen.generate(baseStream: baseStream)
+            
+            var result = ""
+            for try await generation in stream {
+                if case .chunk(let text) = generation { 
+                    result += text 
+                }
             }
+            
+            // Final error check
+            if let error = constraintProcessor.getLastError() {
+                throw error
+            }
+            
             return result
         }
     }
@@ -294,11 +522,12 @@ actor MLXBackend {
                         let userInput = UserInput(prompt: .text(prompt))
                         let input = try await context.processor.prepare(input: userInput)
                         
-                        // Setup constraints
+                        // Setup constraints with error clearing
                         let constraintProcessor = TokenTrieLogitProcessor(
                             schema: schema,
                             tokenizer: context.tokenizer
                         )
+                        constraintProcessor.clearError()
                         
                         // Configure generation parameters
                         // See note above regarding card vs. sampling flows.
@@ -320,20 +549,33 @@ actor MLXBackend {
                             maxTokens: parameters.maxTokens
                         )
                         
-                        // Generate with constraints using the custom iterator
-                        let stream = MLXLMCommon.generate(
+                        // Create base stream and wrap with AbortableGenerator
+                        let baseStream = MLXLMCommon.generate(
                             input: input,
                             context: context,
                             iterator: iterator
                         )
                         
-                        for await generation in stream {
+                        let abortableGen = AbortableGenerator(processor: constraintProcessor)
+                        let stream = abortableGen.generate(baseStream: baseStream)
+                        
+                        for try await generation in stream {
                             if Task.isCancelled {
                                 break
                             }
+                            
                             if case .chunk(let text) = generation {
+                                // Check for fatal errors before yielding
+                                if constraintProcessor.hasFatalError() {
+                                    throw constraintProcessor.getLastError()!
+                                }
                                 continuation.yield(text)
                             }
+                        }
+                        
+                        // Final error check
+                        if let error = constraintProcessor.getLastError() {
+                            throw error
                         }
                         
                         continuation.finish()
@@ -370,6 +612,8 @@ actor MLXBackend {
                             schema: schema,
                             tokenizer: context.tokenizer
                         )
+                        constraintProcessor.clearError()
+                        
                         let sampler = parameters.sampler()
                         let iterator = try TokenIterator(
                             input: input,
@@ -380,17 +624,35 @@ actor MLXBackend {
                             prefillStepSize: parameters.prefillStepSize,
                             maxTokens: parameters.maxTokens
                         )
-                        let stream = MLXLMCommon.generate(
+                        
+                        // Create base stream and wrap with AbortableGenerator
+                        let baseStream = MLXLMCommon.generate(
                             input: input,
                             context: context,
                             iterator: iterator
                         )
-                        for await gen in stream {
+                        
+                        let abortableGen = AbortableGenerator(processor: constraintProcessor)
+                        let stream = abortableGen.generate(baseStream: baseStream)
+                        
+                        for try await gen in stream {
                             if Task.isCancelled {
                                 break
                             }
-                            if case .chunk(let text) = gen { continuation.yield(text) }
+                            if case .chunk(let text) = gen { 
+                                // Check for fatal errors before yielding
+                                if constraintProcessor.hasFatalError() {
+                                    throw constraintProcessor.getLastError()!
+                                }
+                                continuation.yield(text) 
+                            }
                         }
+                        
+                        // Final error check
+                        if let error = constraintProcessor.getLastError() {
+                            throw error
+                        }
+                        
                         continuation.finish()
                     }
                 } catch {
@@ -466,8 +728,7 @@ extension MLXBackend {
         }
     }
     /// Generate with automatic retry on schema violations
-    /// Uses temperature variation strategy: increases temperature slightly on each retry
-    /// to encourage different outputs while maintaining coherence
+    /// Tracks abort positions and adjusts strategy based on failure patterns
     func generateTextConstrainedWithRetry(
         prompt: String,
         sampling: SamplingParameters,
@@ -475,6 +736,7 @@ extension MLXBackend {
         maxRetries: Int = 3
     ) async throws -> String {
         var lastError: Error?
+        var abortPositions: [Int] = []  // Track where each attempt was aborted
         
         // Base temperature for variation strategy
         let baseTemperature = sampling.temperature ?? 0.7
@@ -484,10 +746,30 @@ extension MLXBackend {
             // Vary temperature on retry (but not if seed is set for deterministic generation)
             var adjustedSampling = sampling
             if sampling.seed == nil && attempt > 1 {
-                // Increase temperature slightly to encourage variation
-                let newTemp = min(baseTemperature + Double(attempt - 1) * temperatureIncrement, 1.5)
-                adjustedSampling.temperature = newTemp
-                Logger.debug("[MLXBackend] Retry \(attempt) with temperature: \(newTemp)")
+                // Check if we're consistently failing at the same position
+                if abortPositions.count >= 2 {
+                    let lastTwo = abortPositions.suffix(2)
+                    let similarPositions = lastTwo.allSatisfy { pos in 
+                        abs(pos - abortPositions.last!) < 3
+                    }
+                    
+                    if similarPositions {
+                        // Increase temperature more aggressively if stuck at same position
+                        let newTemp = min(baseTemperature + Double(attempt) * temperatureIncrement * 1.5, 1.5)
+                        adjustedSampling.temperature = newTemp
+                        Logger.info("[MLXBackend] Stuck at position ~\(abortPositions.last!), increasing temperature to \(newTemp)")
+                    } else {
+                        // Normal temperature increase
+                        let newTemp = min(baseTemperature + Double(attempt - 1) * temperatureIncrement, 1.5)
+                        adjustedSampling.temperature = newTemp
+                        Logger.debug("[MLXBackend] Retry \(attempt) with temperature: \(newTemp)")
+                    }
+                } else {
+                    // Normal temperature increase for early retries
+                    let newTemp = min(baseTemperature + Double(attempt - 1) * temperatureIncrement, 1.5)
+                    adjustedSampling.temperature = newTemp
+                    Logger.debug("[MLXBackend] Retry \(attempt) with temperature: \(newTemp)")
+                }
             }
             
             do {
@@ -499,11 +781,28 @@ extension MLXBackend {
                 
                 // Validate the generated JSON
                 if validateJSON(result, schema: schema) {
+                    if !abortPositions.isEmpty {
+                        Logger.info("[MLXBackend] Success after \(attempt) attempts (previous aborts at: \(abortPositions))")
+                    }
                     return result
                 } else {
                     Logger.warning("[MLXBackend] Attempt \(attempt): Schema validation failed, retrying...")
                     lastError = MLXBackendError.schemaViolation
                 }
+            } catch let jsonError as JSONGenerationError {
+                // Track abort position if available
+                switch jsonError {
+                case .noValidTokens(_, let position):
+                    abortPositions.append(position)
+                    Logger.warning("[MLXBackend] Attempt \(attempt) aborted at token position \(position)")
+                case .invalidTokenSelected(_, _, _):
+                    // Token-level error, track as early abort
+                    abortPositions.append(0)
+                    Logger.warning("[MLXBackend] Attempt \(attempt) aborted early due to invalid token")
+                default:
+                    Logger.warning("[MLXBackend] Attempt \(attempt) failed: \(jsonError)")
+                }
+                lastError = jsonError
             } catch {
                 Logger.warning("[MLXBackend] Attempt \(attempt) failed: \(error.localizedDescription)")
                 lastError = error

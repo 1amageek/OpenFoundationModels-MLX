@@ -2,7 +2,6 @@ import Testing
 import Foundation
 import Tokenizers
 @testable import OpenFoundationModelsMLX
-@testable import PRECISE
 
 @Suite("MLXLLM Tokenizer Tests")
 struct MLXLLMTokenizerTests {
@@ -199,8 +198,7 @@ struct MLXLLMTokenizerTests {
         let special2 = tokenizer.getSpecialTokens()
         
         // Should return same cached instance
-        #expect(special1 != nil)
-        #expect(special1?.quoteTokens == special2?.quoteTokens)
+        #expect(special1.quoteTokens == special2.quoteTokens)
     }
     
     @Test("Identifies whitespace tokens")

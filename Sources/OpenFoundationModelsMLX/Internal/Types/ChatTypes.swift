@@ -1,5 +1,4 @@
 import Foundation
-import PRECISE
 import MLXLMCommon
 
 // Internal chat-style types used by the MLXChatEngine.

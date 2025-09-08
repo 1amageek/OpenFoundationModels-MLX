@@ -19,33 +19,16 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers", .upToNextMinor(from: "0.1.23")),
     ],
     targets: [
-        // PRECISE: Independent foundation module for constraint intelligence
-        .target(
-            name: "PRECISE",
-            dependencies: [
-                .product(name: "MLXLLM", package: "mlx-swift-examples"),
-                .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
-                .product(name: "Transformers", package: "swift-transformers"),
-            ],
-            path: "Sources/PRECISE"
-        ),
-        // Main MLX adapter target that uses PRECISE
+        // Main MLX adapter target
         .target(
             name: "OpenFoundationModelsMLX",
             dependencies: [
-                "PRECISE",  // OpenFoundationModelsMLX uses PRECISE
                 .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels"),
                 .product(name: "OpenFoundationModels", package: "OpenFoundationModels"),
                 .product(name: "MLXLLM", package: "mlx-swift-examples"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
                 .product(name: "Transformers", package: "swift-transformers"),
             ]
-        ),
-        // PRECISE test target
-        .testTarget(
-            name: "PRECISETests",
-            dependencies: ["PRECISE", "OpenFoundationModelsMLX"],
-            path: "Tests/PRECISETests"
         ),
         // Main test target
         .testTarget(

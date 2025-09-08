@@ -1,5 +1,4 @@
 import Foundation
-import PRECISE
 // Mask hint generation for JSON state machine
 // Provides allowed token sets based on current parsing state
 public struct JSONMaskHint: Sendable {
@@ -22,7 +21,7 @@ public struct JSONMaskHint: Sendable {
 
 // MARK: - Mask Hint Generator
 
-public struct JSONMaskHintGenerator {
+public struct JSONMaskHintGenerator: Sendable {
     
     private let specialTokens: MLXLLMTokenizer.SpecialTokens
     private let includeWhitespace: Bool
@@ -156,6 +155,8 @@ public struct JSONMaskHintGenerator {
     ) -> JSONMaskHint? {
         
         switch strPhase {
+        case .start, .end:
+            return nil
         case .body(let kind, _):
             if kind == .key {
                 // Apply TokenTrie constraints for key strings
@@ -180,10 +181,6 @@ public struct JSONMaskHintGenerator {
             }
             // For value strings or when no trie available, allow any tokens
             // (string content is unrestricted except for control characters)
-            return nil
-            
-        case .unicode:
-            // Unicode escape sequences need hex digits - too complex for token mask
             return nil
         }
     }

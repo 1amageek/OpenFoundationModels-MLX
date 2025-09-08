@@ -1,6 +1,5 @@
 import Testing
 import Foundation
-@testable import PRECISE
 @testable import OpenFoundationModelsMLX
 
 @Suite("JSONValidator Tests")

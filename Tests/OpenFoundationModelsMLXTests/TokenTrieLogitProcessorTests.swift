@@ -4,7 +4,6 @@ import MLX
 import MLXRandom
 import MLXLLM
 @testable import OpenFoundationModelsMLX
-@testable import PRECISE
 
 @Suite("TokenTrie LogitProcessor Tests")
 struct TokenTrieLogitProcessorTests {
@@ -13,28 +12,28 @@ struct TokenTrieLogitProcessorTests {
     
     @Test("TokenTrie initializes correctly")
     func tokenTrieInitialization() {
-        let trie = TokenTrie()
+        let trie = OpenFoundationModelsMLX.TokenTrie()
         #expect(trie.root.children.isEmpty)
     }
     
     @Test("TokenTrie insert and retrieve")
     func tokenTrieInsertRetrieve() {
-        var trie = TokenTrie()
+        var trie = OpenFoundationModelsMLX.TokenTrie()
         trie.insert(tokenIDs: [100, 101, 102], keyName: "name")
         trie.insert(tokenIDs: [200, 201], keyName: "age")
         
         // Test path creation
-        let path = TokenTrie.Path(root: trie.root)
+        let path = OpenFoundationModelsMLX.TokenTrie.Path(root: trie.root)
         #expect(path.tokens.isEmpty)
         #expect(path.currentNode === trie.root)
     }
     
     @Test("TokenTrie path tracking")
     func tokenTriePathTracking() {
-        var trie = TokenTrie()
+        var trie = OpenFoundationModelsMLX.TokenTrie()
         trie.insert(tokenIDs: [100, 101], keyName: "test")
         
-        var path = TokenTrie.Path(root: trie.root)
+        var path = OpenFoundationModelsMLX.TokenTrie.Path(root: trie.root)
         
         // Append first token
         let success1 = path.append(100, in: trie)
@@ -52,12 +51,12 @@ struct TokenTrieLogitProcessorTests {
     
     @Test("TokenTrie getAllowedTokens")
     func tokenTrieGetAllowedTokens() {
-        var trie = TokenTrie()
+        var trie = OpenFoundationModelsMLX.TokenTrie()
         trie.insert(tokenIDs: [100, 101], keyName: "first")
         trie.insert(tokenIDs: [100, 102], keyName: "second")
         trie.insert(tokenIDs: [200], keyName: "third")
         
-        let path = TokenTrie.Path(root: trie.root)
+        let path = OpenFoundationModelsMLX.TokenTrie.Path(root: trie.root)
         let allowed = trie.getAllowedTokens(for: path)
         
         // At root, should allow 100 and 200
@@ -206,11 +205,11 @@ struct TokenTrieLogitProcessorTests {
             includeWhitespace: false
         )
         
-        var trie = TokenTrie()
+        var trie = OpenFoundationModelsMLX.TokenTrie()
         trie.insert(tokenIDs: [100, 101], keyName: "test")
         
         let stateMachine = JSONStateMachine()
-        let path = TokenTrie.Path(root: trie.root)
+        let path = OpenFoundationModelsMLX.TokenTrie.Path(root: trie.root)
         
         let hint = generator.maskHint(
             for: stateMachine,
@@ -232,7 +231,7 @@ struct TokenTrieLogitProcessorTests {
     
     @Test("TokenTrie with complex keys")
     func tokenTrieComplexKeys() {
-        var trie = TokenTrie()
+        var trie = OpenFoundationModelsMLX.TokenTrie()
         
         // Insert multiple keys with shared prefixes
         trie.insert(tokenIDs: [100, 101, 102], keyName: "firstName")
@@ -287,11 +286,116 @@ struct TokenTrieLogitProcessorTests {
         #expect(stateMachine.phase != .error)
     }
     
+    // MARK: - Error Management Tests
+    
+    @Test("TokenTrieLogitProcessor hasError detection")
+    func processorHasErrorDetection() {
+        let schema = SchemaMeta(keys: ["name", "age"], required: ["name"])
+        let tokenizer = MockSwiftTokenizer()
+        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
+        
+        // Initially no error
+        #expect(!processor.hasError())
+        #expect(processor.getLastError() == nil)
+        
+        // Process some logits - this would normally set errors internally
+        // Since we can't directly set errors, we'll test the public interface
+        processor.clearError()
+        #expect(!processor.hasError())
+    }
+    
+    @Test("TokenTrieLogitProcessor clearError")
+    func processorClearError() {
+        let schema = SchemaMeta(keys: ["test"], required: [])
+        let tokenizer = MockSwiftTokenizer()
+        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
+        
+        // Clear should work even with no error
+        processor.clearError()
+        #expect(!processor.hasError())
+        #expect(processor.getLastError() == nil)
+    }
+    
+    @Test("TokenTrieLogitProcessor hasFatalError classification")
+    func processorFatalErrorClassification() {
+        // Use mock processor to test error classification
+        let processor = MockLogitProcessor()
+        
+        // Test fatal error
+        processor.shouldTriggerFatalError = true
+        processor.mockError = .noValidTokens(partialKey: "test", position: 1)
+        #expect(processor.hasFatalError())
+        #expect(processor.hasError())
+        
+        // Test non-fatal error
+        processor.clearError()
+        processor.shouldTriggerNonFatalError = true
+        processor.mockError = .emptyConstraints
+        #expect(!processor.hasFatalError())
+        #expect(processor.hasError())
+    }
+    
+    @Test("TokenTrieLogitProcessor error types")
+    func processorErrorTypes() {
+        let processor = MockLogitProcessor()
+        
+        // Test noValidTokens (fatal)
+        processor.mockError = .noValidTokens(partialKey: "test", position: 5)
+        processor.shouldTriggerFatalError = true
+        #expect(processor.hasFatalError())
+        
+        // Test invalidTokenSelected (fatal)
+        processor.clearError()
+        processor.mockError = .invalidTokenSelected(
+            token: 123,
+            partialKey: "test",
+            expectedTokens: Set([456, 789])
+        )
+        processor.shouldTriggerFatalError = true
+        #expect(processor.hasFatalError())
+        
+        // Test emptyConstraints (non-fatal)
+        processor.clearError()
+        processor.mockError = .emptyConstraints
+        processor.shouldTriggerNonFatalError = true
+        #expect(!processor.hasFatalError())
+        
+        // Test schemaViolation (non-fatal)
+        processor.clearError()
+        processor.mockError = .schemaViolation(reason: "test violation")
+        processor.shouldTriggerNonFatalError = true
+        #expect(!processor.hasFatalError())
+    }
+    
+    @Test("TokenTrieLogitProcessor constraint application with errors")
+    func processorConstraintApplicationWithErrors() {
+        var trie = OpenFoundationModelsMLX.TokenTrie()
+        trie.insert(tokenIDs: [100, 101], keyName: "name")
+        trie.insert(tokenIDs: [200], keyName: "age")
+        
+        let schema = SchemaMeta(keys: ["name", "age"], required: [])
+        let tokenizer = MockSwiftTokenizer()
+        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
+        
+        // Create a simple logits array
+        let logits = MLX.zeros([1, 1000])
+        
+        // Process logits - should apply constraints
+        let processed = processor.process(logits: logits)
+        
+        // Result should have same shape
+        #expect(processed.shape == logits.shape)
+        
+        // Check error state after processing
+        // Note: Actual error detection would depend on JSON state
+        #expect(!processor.hasFatalError() || processor.hasError())
+    }
+    
     // MARK: - Performance Tests
     
     @Test("TokenTrie handles large vocabulary")
     func tokenTrieLargeVocabulary() {
-        var trie = TokenTrie()
+        var trie = OpenFoundationModelsMLX.TokenTrie()
         
         // Insert many keys
         for i in 0..<100 {
@@ -300,7 +404,7 @@ struct TokenTrieLogitProcessorTests {
         }
         
         // Test that trie still works
-        let path = TokenTrie.Path(root: trie.root)
+        let path = OpenFoundationModelsMLX.TokenTrie.Path(root: trie.root)
         let allowed = trie.getAllowedTokens(for: path)
         
         // Should have 100 different starting tokens

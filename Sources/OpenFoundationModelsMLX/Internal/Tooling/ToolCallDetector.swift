@@ -1,5 +1,4 @@
 import Foundation
-import PRECISE
 import OpenFoundationModels
 
 enum ToolCallDetector {

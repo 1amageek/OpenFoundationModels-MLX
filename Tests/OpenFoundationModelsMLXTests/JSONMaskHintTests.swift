@@ -1,7 +1,6 @@
 import Testing
 import Foundation
 @testable import OpenFoundationModelsMLX
-@testable import PRECISE
 
 @Suite("JSON Mask Hint Tests")
 struct JSONMaskHintTests {

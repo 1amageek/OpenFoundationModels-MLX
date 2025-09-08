@@ -1,7 +1,6 @@
 import Testing
 import Foundation
 @testable import OpenFoundationModelsMLX
-@testable import PRECISE
 
 @Suite("JSON State Machine Tests")
 struct JSONStateMachineTests {
@@ -211,7 +210,7 @@ struct JSONStateMachineTests {
         } else {
             Issue.record("Expected inNumber phase")
         }
-        #expect(machine.sawTopValue)
+        // Note: sawTopValue tracking removed
     }
     
     @Test("Decimal number")
@@ -229,7 +228,7 @@ struct JSONStateMachineTests {
         } else {
             Issue.record("Expected inNumber phase")
         }
-        #expect(machine.sawTopValue)
+        // Note: sawTopValue tracking removed
     }
     
     @Test("Scientific notation")
@@ -247,7 +246,7 @@ struct JSONStateMachineTests {
         } else {
             Issue.record("Expected inNumber phase")
         }
-        #expect(machine.sawTopValue)
+        // Note: sawTopValue tracking removed
     }
     
     @Test("Negative number")
@@ -265,7 +264,7 @@ struct JSONStateMachineTests {
         } else {
             Issue.record("Expected inNumber phase")
         }
-        #expect(machine.sawTopValue)
+        // Note: sawTopValue tracking removed
     }
     
     // MARK: - Literal State Tests

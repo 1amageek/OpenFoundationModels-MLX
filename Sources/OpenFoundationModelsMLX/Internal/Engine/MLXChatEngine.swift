@@ -1,70 +1,15 @@
 import Foundation
-import PRECISE
-/// Dynamic buffer size adjustment based on JSON complexity and memory pressure
-private struct DynamicBufferSizer {
-    private let baseSize: Int = 512 * 1024  // 512KB base
-    private let minSize: Int = 256 * 1024   // 256KB minimum  
-    private let maxSize: Int = 8 * 1024 * 1024  // 8MB maximum
-    
-    private let schemaComplexity: Int
-    private var currentSize: Int
-    
-    init(schemaKeys: [String]) {
-        // Calculate schema complexity based on key count and estimated depth
-        let keyCount = schemaKeys.count
-        let avgKeyLength = schemaKeys.isEmpty ? 0 : schemaKeys.map(\.count).reduce(0, +) / schemaKeys.count
-        
-        // Complexity heuristic: more keys and longer names = more complex JSON
-        self.schemaComplexity = keyCount + (avgKeyLength / 4)
-        
-        // Start with base size adjusted for complexity
-        let complexityMultiplier = 1.0 + Double(schemaComplexity) / 100.0
-        self.currentSize = min(Int(Double(baseSize) * complexityMultiplier), maxSize)
-    }
-    
-    mutating func currentBufferLimit() -> Int {
-        return currentSize
-    }
-    
-    mutating func adjustForContent(buffer: String, jsonState: JSONStateMachine) {
-        let bufferLength = buffer.utf8.count
-        let stackDepth = jsonState.stack.count
-        
-        // Increase size if we're using most of the current buffer and nesting is deep
-        if bufferLength > Int(Double(currentSize) * 0.75) && stackDepth > 3 {
-            let growthFactor = 1.0 + Double(stackDepth) / 20.0
-            let newSize = min(Int(Double(currentSize) * growthFactor), maxSize)
-            
-            if newSize > currentSize {
-                currentSize = newSize
-                Logger.debug("[DynamicBufferSizer] Increased buffer size to \(currentSize/1024)KB (depth: \(stackDepth))")
-            }
-        }
-        
-        // Decrease size if buffer usage is consistently low (but keep minimum)
-        if bufferLength < currentSize / 4 && currentSize > baseSize {
-            currentSize = max(Int(Double(currentSize) * 0.8), minSize)
-            Logger.debug("[DynamicBufferSizer] Decreased buffer size to \(currentSize/1024)KB")
-        }
-    }
-    
-    mutating func adjustForMemoryPressure() {
-        // Simple memory pressure response - reduce to minimum
-        if currentSize > minSize {
-            currentSize = minSize
-            Logger.warning("[DynamicBufferSizer] Memory pressure detected, reduced buffer to \(minSize/1024)KB")
-        }
-    }
-}
 
 // Core engine actor that orchestrates text generation through MLXBackend.
 // Now operates as a simple low-level executor - no prompt rendering, no retries.
 actor MLXChatEngine {
     let modelID: String
     private let backend: MLXBackend
+    private let maxBufferSizeKB: Int  // Simple buffer size configuration
 
-    init(modelID: String) async throws {
+    init(modelID: String, maxBufferSizeKB: Int = 2048) async throws {
         self.modelID = modelID
+        self.maxBufferSizeKB = maxBufferSizeKB
         self.backend = try await MLXBackend(modelID: modelID)
     }
 
@@ -147,9 +92,9 @@ actor MLXChatEngine {
 
                 // If schema validation is needed, buffer and validate; otherwise pass-through
                 if hasSchema && !schemaKeys.isEmpty {
-                    var bufferSizer = DynamicBufferSizer(schemaKeys: schemaKeys)
+                    let bufferLimit = maxBufferSizeKB * 1024  // Convert KB to bytes
                     var tracker = JSONKeyTracker(schemaKeys: schemaKeys)
-                    var jsonState = JSONStateMachine()
+                    let jsonState = JSONStateMachine()
                     var buffer = ""
                     
                     do {
@@ -161,13 +106,9 @@ actor MLXChatEngine {
                             
                             buffer += piece
                             
-                            // Adjust buffer size dynamically based on content
-                            bufferSizer.adjustForContent(buffer: buffer, jsonState: jsonState)
-                            let currentBufferLimit = bufferSizer.currentBufferLimit()
-                            
                             // Check buffer size limit
-                            if buffer.utf8.count > currentBufferLimit {
-                                Logger.warning("[MLXChatEngine] Buffer size exceeded limit (\(currentBufferLimit/1024)KB)")
+                            if buffer.utf8.count > bufferLimit {
+                                Logger.warning("[MLXChatEngine] Buffer size exceeded limit (\(bufferLimit/1024)KB)")
                                 throw ValidationError.bufferLimitExceeded
                             }
                             
@@ -185,6 +126,7 @@ actor MLXChatEngine {
                             // Check for early completion
                             if jsonState.isComplete() {
                                 Logger.debug("[MLXChatEngine] JSON complete at depth 0, early termination")
+                                streamTask.cancel()  // Cancel upstream generation immediately
                                 break
                             }
                             
@@ -192,10 +134,12 @@ actor MLXChatEngine {
                             tracker.consume(piece)
                             if tracker.violationCount >= 3 {
                                 Logger.debug("[MLXChatEngine] Violation threshold exceeded")
+                                streamTask.cancel()  // Cancel upstream generation immediately
                                 throw ValidationError.schemaViolations
                             }
                         }
                     } catch {
+                        streamTask.cancel()  // Ensure cancellation on any error
                         continuation.finish(throwing: error)
                         return
                     }
