@@ -12,11 +12,15 @@ let package = Package(
             name: "OpenFoundationModelsMLX",
             targets: ["OpenFoundationModelsMLX"]
         ),
+        .executable(
+            name: "llama32",
+            targets: ["llama32-cli"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/1amageek/OpenFoundationModels", branch: "main"),
         .package(url: "https://github.com/ml-explore/mlx-swift-examples.git", branch: "main"),
-        .package(url: "https://github.com/huggingface/swift-transformers", .upToNextMinor(from: "0.1.23")),
+        .package(url: "https://github.com/huggingface/swift-transformers", from: "0.1.23"),
     ],
     targets: [
         // Main MLX adapter target
@@ -28,6 +32,16 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-examples"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
                 .product(name: "Transformers", package: "swift-transformers"),
+            ]
+        ),
+        // Llama 3.2 CLI executable
+        .executableTarget(
+            name: "llama32-cli",
+            dependencies: [
+                "OpenFoundationModelsMLX",
+                .product(name: "OpenFoundationModels", package: "OpenFoundationModels"),
+                .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
             ]
         ),
         // Main test target
