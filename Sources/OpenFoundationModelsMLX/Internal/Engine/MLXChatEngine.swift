@@ -36,7 +36,11 @@ actor MLXChatEngine {
         }
         
         let text: String
-        if let schema = req.schema {
+        if let schemaNode = req.schemaNode {
+            // Use hierarchical schema if available
+            text = try await backend.generateTextWithSchema(prompt: prompt, sampling: sampling, schema: schemaNode)
+        } else if let schema = req.schema {
+            // Fallback to legacy flat schema
             text = try await backend.generateTextConstrained(prompt: prompt, sampling: sampling, schema: schema)
         } else {
             text = try await backend.generateText(prompt: prompt, sampling: sampling)
@@ -46,7 +50,13 @@ actor MLXChatEngine {
         switch req.responseFormat {
         case .text: break
         case .jsonSchema:
-            if let meta = req.schema {
+            if let schemaNode = req.schemaNode {
+                // Validate with hierarchical schema
+                if JSONValidator.validate(text: text, schema: schemaNode) == false { 
+                    throw ValidationError.schemaUnsatisfied 
+                }
+            } else if let meta = req.schema {
+                // Fallback to legacy validation
                 let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
                 if validator.validate(text: text, schema: meta) == false { 
                     throw ValidationError.schemaUnsatisfied 

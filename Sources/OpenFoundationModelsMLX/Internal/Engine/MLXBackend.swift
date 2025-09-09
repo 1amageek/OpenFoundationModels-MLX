@@ -88,6 +88,31 @@ public actor MLXBackend {
             throw MLXBackendError.noModelSet
         }
         
+        // Convert SchemaMeta to SchemaNode for ADAPT
+        let node = SchemaNode(
+            kind: .object,
+            properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
+            required: Set(schema.required)
+        )
+        
+        return try await adaptEngine.generateWithSchema(
+            executor: executor,
+            prompt: prompt,
+            schema: node,
+            parameters: sampling
+        )
+    }
+    
+    // New method with SchemaNode support
+    func generateTextWithSchema(
+        prompt: String,
+        sampling: SamplingParameters,
+        schema: SchemaNode
+    ) async throws -> String {
+        guard await hasModel() else {
+            throw MLXBackendError.noModelSet
+        }
+        
         return try await adaptEngine.generateWithSchema(
             executor: executor,
             prompt: prompt,
@@ -137,6 +162,45 @@ public actor MLXBackend {
         prompt: String,
         sampling: SamplingParameters,
         schema: SchemaMeta
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                guard await hasModel() else {
+                    continuation.finish(throwing: MLXBackendError.noModelSet)
+                    return
+                }
+                
+                // Convert SchemaMeta to SchemaNode for ADAPT
+                let node = SchemaNode(
+                    kind: .object,
+                    properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
+                    required: Set(schema.required)
+                )
+                
+                let stream = await adaptEngine.streamWithSchema(
+                    executor: executor,
+                    prompt: prompt,
+                    schema: node,
+                    parameters: sampling
+                )
+                
+                do {
+                    for try await chunk in stream {
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    // New method with SchemaNode support  
+    func streamTextWithSchema(
+        prompt: String,
+        sampling: SamplingParameters,
+        schema: SchemaNode
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             Task {

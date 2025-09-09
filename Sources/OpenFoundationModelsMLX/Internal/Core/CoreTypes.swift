@@ -98,6 +98,7 @@ public struct TokenTrie: Sendable {
         }
         node.terminal = true
         node.keyName = keyName
+        print("🌳 [TokenTrie.insert] Marked node as terminal for key '\(keyName ?? "unknown")' at path \(tokenIDs)")
         if let key = keyName {
             allKeys.insert(key)
         }
@@ -119,9 +120,12 @@ public struct TokenTrie: Sendable {
     
     public func getAllowedTokens(for path: Path) -> Set<Int32> {
         guard let currentNode = path.currentNode ?? node(for: path.tokens) else {
+            print("⚠️ [TokenTrie] No current node for path tokens: \(path.tokens)")
             return []
         }
-        return Set(currentNode.children.keys)
+        let allowed = Set(currentNode.children.keys)
+        print("🔍 [TokenTrie] Allowed tokens for path \(path.tokens): \(allowed.prefix(5)) (total: \(allowed.count))")
+        return allowed
     }
     
     public func canComplete(from path: Path) -> Bool {
@@ -153,11 +157,13 @@ public struct TokenTrie: Sendable {
             }
             
             guard let node = nextNode else {
+                print("⚠️ [Path.append] No node found for token \(tokenID)")
                 return false
             }
             
             tokens.append(tokenID)
             currentNode = node
+            print("📍 [Path.append] Added token \(tokenID), path now: \(tokens), terminal: \(node.terminal), keyName: \(node.keyName ?? "nil")")
             return true
         }
         
@@ -167,7 +173,9 @@ public struct TokenTrie: Sendable {
         }
         
         public func isAtTerminal() -> Bool {
-            return currentNode?.terminal ?? false
+            let result = currentNode?.terminal ?? false
+            print("🎯 [Path.isAtTerminal] Checking terminal: \(result), currentNode exists: \(currentNode != nil), keyName: \(currentNode?.keyName ?? "nil")")
+            return result
         }
         
         public func getKeyName() -> String? {
@@ -205,10 +213,15 @@ public enum TokenTrieBuilder {
         var trie = TokenTrie()
         let uniqueKeys = Set(keys).filter { !$0.isEmpty }
         
+        print("🔨 [TokenTrieBuilder] Building trie for keys: \(uniqueKeys)")
+        
         for key in uniqueKeys {
             let ids = tokenizer.encode(key)
+            print("🔑 [TokenTrieBuilder] Key '\(key)' encoded to tokens: \(ids)")
             trie.insert(tokenIDs: ids, keyName: key)
         }
+        
+        print("✅ [TokenTrieBuilder] Trie built with \(uniqueKeys.count) keys")
         return trie
     }
     

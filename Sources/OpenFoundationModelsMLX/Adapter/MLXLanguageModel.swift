@@ -44,30 +44,62 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
         
+        print("🎯 [MLXLanguageModel] Generated prompt to send to LLM:")
+        print("================== PROMPT START ==================")
+        print(prompt.description)
+        print("=================== PROMPT END ===================")
+        
         // Extract necessary data for ChatRequest
         let ext = TranscriptAccess.extract(from: transcript)
+        
+        print("🔍 [MLXLanguageModel] Extracting schema information...")
+        print("📝 [MLXLanguageModel] Schema JSON: \(ext.schemaJSON ?? "nil")")
         
         // Map transcript response format -> schema meta
         let responseFormat: ResponseFormatSpec = {
             if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
+                print("📋 [MLXLanguageModel] Using JSON schema response format")
                 return .jsonSchema(schemaJSON: schemaJSON) 
             }
+            print("📋 [MLXLanguageModel] Using text response format")
             return .text
         }()
         
-        let schemaMeta: SchemaMeta? = {
+        // Extract hierarchical schema for nested object support
+        let schemaNode: SchemaNode? = {
             switch responseFormat {
             case .jsonSchema(let json):
-                if let data = json.data(using: .utf8),
-                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    let keys = (dict["properties"] as? [String: Any])?.keys.map { String($0) } ?? []
-                    let required = (dict["required"] as? [String]) ?? []
-                    return SchemaMeta(keys: keys, required: required)
+                print("🔍 [MLXLanguageModel] Parsing schema JSON to SchemaNode...")
+                if let node = SchemaBuilder.fromJSONString(json) {
+                    print("📋 [MLXLanguageModel] Schema root keys: \(node.objectKeys)")
+                    print("📋 [MLXLanguageModel] Required fields: \(node.required)")
+                    SchemaBuilder.debugPrint(node)
+                    return node
                 }
+                print("⚠️ [MLXLanguageModel] Failed to parse schema JSON")
                 return nil
             default: 
                 return nil
             }
+        }()
+        
+        // Also create legacy SchemaMeta for backward compatibility
+        let schemaMeta: SchemaMeta? = {
+            guard let node = schemaNode else { return nil }
+            // Flatten all keys for legacy compatibility
+            var allKeys: [String] = []
+            func collectKeys(from node: SchemaNode) {
+                if node.kind == .object {
+                    allKeys.append(contentsOf: node.objectKeys)
+                    for (_, child) in node.properties {
+                        collectKeys(from: child)
+                    }
+                } else if node.kind == .array, let items = node.items {
+                    collectKeys(from: items)
+                }
+            }
+            collectKeys(from: node)
+            return SchemaMeta(keys: allKeys, required: Array(node.required))
         }()
         
         // Build ChatRequest
@@ -84,10 +116,12 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         )
         
         do {
+            print("🚀 [MLXLanguageModel] Sending request to engine...")
             let res = try await engine.generate(req)
             // Convert the assistant text into a Transcript.Entry.response in a
             // conservative way: return plain text response segment.
             if let text = res.choices.first?.content {
+                print("📝 [MLXLanguageModel] Generated text: \(text)")
                 if let entry = ToolCallDetector.entryIfPresent(text) {
                     return entry
                 }
@@ -124,19 +158,41 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             return .text
         }()
         
-        let schemaMeta: SchemaMeta? = {
+        // Extract hierarchical schema for nested object support
+        let schemaNode: SchemaNode? = {
             switch responseFormat {
             case .jsonSchema(let json):
-                if let data = json.data(using: .utf8),
-                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    let keys = (dict["properties"] as? [String: Any])?.keys.map { String($0) } ?? []
-                    let required = (dict["required"] as? [String]) ?? []
-                    return SchemaMeta(keys: keys, required: required)
+                print("🔍 [MLXLanguageModel] Parsing schema JSON to SchemaNode...")
+                if let node = SchemaBuilder.fromJSONString(json) {
+                    print("📋 [MLXLanguageModel] Schema root keys: \(node.objectKeys)")
+                    print("📋 [MLXLanguageModel] Required fields: \(node.required)")
+                    SchemaBuilder.debugPrint(node)
+                    return node
                 }
+                print("⚠️ [MLXLanguageModel] Failed to parse schema JSON")
                 return nil
             default: 
                 return nil
             }
+        }()
+        
+        // Also create legacy SchemaMeta for backward compatibility
+        let schemaMeta: SchemaMeta? = {
+            guard let node = schemaNode else { return nil }
+            // Flatten all keys for legacy compatibility
+            var allKeys: [String] = []
+            func collectKeys(from node: SchemaNode) {
+                if node.kind == .object {
+                    allKeys.append(contentsOf: node.objectKeys)
+                    for (_, child) in node.properties {
+                        collectKeys(from: child)
+                    }
+                } else if node.kind == .array, let items = node.items {
+                    collectKeys(from: items)
+                }
+            }
+            collectKeys(from: node)
+            return SchemaMeta(keys: allKeys, required: Array(node.required))
         }()
         
         // Build ChatRequest

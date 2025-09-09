@@ -42,13 +42,13 @@ public actor ADAPTEngine {
     /// - Parameters:
     ///   - executor: The MLXExecutor to use for model execution
     ///   - prompt: The input prompt
-    ///   - schema: The schema metadata for constraints
+    ///   - schema: The hierarchical schema node for constraints
     ///   - parameters: Sampling parameters
     /// - Returns: Generated text that conforms to the schema
     func generateWithSchema(
         executor: MLXExecutor,
         prompt: String,
-        schema: SchemaMeta,
+        schema: SchemaNode,
         parameters: SamplingParameters
     ) async throws -> String {
         // Get model container from executor
@@ -60,7 +60,7 @@ public actor ADAPTEngine {
         return try await container.perform { (context: ModelContext) async throws -> String in
             let tokenizer = context.tokenizer
             
-            // Create constraint processor
+            // Create constraint processor with nested schema support
             let constraintProcessor = TokenTrieLogitProcessor(
                 schema: schema,
                 tokenizer: tokenizer
@@ -82,8 +82,17 @@ public actor ADAPTEngine {
             )
             
             // Validate the result
-            let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-            if !validator.validate(text: result, schema: schema) {
+            print("🔍 [ADAPTEngine] Validating generated JSON...")
+            print("📝 [ADAPTEngine] Generated text: \(result)")
+            print("📋 [ADAPTEngine] Schema root keys: \(schema.objectKeys)")
+            print("📋 [ADAPTEngine] Required fields: \(schema.required)")
+            
+            // Use hierarchical validator for nested schema
+            let isValid = JSONValidator.validate(text: result, schema: schema)
+            print("✅ [ADAPTEngine] Validation result: \(isValid)")
+            
+            if !isValid {
+                print("❌ [ADAPTEngine] Validation failed!")
                 // For now, skip snap correction (would need SchemaSnapParser to be public)
                 // This could be added back if SchemaSnapParser is made public
                 throw ADAPTError.validationFailed("Generated JSON does not match schema")
@@ -97,13 +106,13 @@ public actor ADAPTEngine {
     /// - Parameters:
     ///   - executor: The MLXExecutor to use for model execution
     ///   - prompt: The input prompt
-    ///   - schema: The schema metadata for constraints
+    ///   - schema: The hierarchical schema node for constraints
     ///   - parameters: Sampling parameters
     /// - Returns: Stream of generated text chunks
     func streamWithSchema(
         executor: MLXExecutor,
         prompt: String,
-        schema: SchemaMeta,
+        schema: SchemaNode,
         parameters: SamplingParameters
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
@@ -118,7 +127,7 @@ public actor ADAPTEngine {
                     try await container.perform { (context: ModelContext) async throws in
                         let tokenizer = context.tokenizer
                         
-                        // Create constraint processor
+                        // Create constraint processor with nested schema support
                         let constraintProcessor = TokenTrieLogitProcessor(
                             schema: schema,
                             tokenizer: tokenizer
@@ -154,9 +163,8 @@ public actor ADAPTEngine {
                             
                             // Check for JSON completion
                             if jsonState.isComplete() {
-                                // Validate complete JSON
-                                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                                if validator.validate(text: buffer, schema: schema) {
+                                // Validate complete JSON with hierarchical schema
+                                if JSONValidator.validate(text: buffer, schema: schema) {
                                     continuation.yield(chunk)
                                     continuation.finish()
                                     return
@@ -174,9 +182,8 @@ public actor ADAPTEngine {
                             continuation.yield(chunk)
                         }
                         
-                        // Final validation
-                        let finalValidator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                        if !finalValidator.validate(text: buffer, schema: schema) {
+                        // Final validation with hierarchical schema
+                        if !JSONValidator.validate(text: buffer, schema: schema) {
                             throw ADAPTError.validationFailed("Final JSON does not match schema")
                         }
                         
@@ -193,11 +200,11 @@ public actor ADAPTEngine {
     
     /// Create a LogitProcessor for the given schema
     /// - Parameters:
-    ///   - schema: The schema metadata
+    ///   - schema: The hierarchical schema node
     ///   - tokenizer: The tokenizer to use
     /// - Returns: A configured LogitProcessor
     public func createLogitProcessor(
-        schema: SchemaMeta,
+        schema: SchemaNode,
         tokenizer: Tokenizer
     ) -> LogitProcessor {
         return TokenTrieLogitProcessor(
