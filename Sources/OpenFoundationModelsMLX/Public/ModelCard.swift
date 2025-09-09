@@ -1,5 +1,6 @@
 import Foundation
 import MLXLMCommon
+import OpenFoundationModels
 
 /// Input for ModelCard rendering.
 /// ModelCard receives this data and returns a fully rendered prompt string.
@@ -51,8 +52,10 @@ public struct ModelCardInput: Sendable {
 public protocol ModelCard: Identifiable, Sendable where ID == String {
     /// Backend model identifier (e.g., Hugging Face repo id or local id).
     var id: String { get }
-    /// Produce a fully rendered prompt string for the given input.
-    func render(input: ModelCardInput) throws -> String
+    
+    /// Generate prompt from transcript and options using OpenFoundationModels' PromptBuilder
+    func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt
+    
     /// Default generation parameters for this model (used as-is; no fallback/merge in MLX layer).
     var params: GenerateParameters { get }
 }

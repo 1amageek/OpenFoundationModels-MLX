@@ -785,6 +785,206 @@ class MLXLanguageModel {
 - `swift-transformers`: HuggingFace tokenizer (v0.1.23+)
 - `Hub`: HuggingFace Hub API for model downloads
 
+## ModelCard Template System
+
+### Overview
+
+ModelCard is responsible for transforming Transcript into model-specific prompt formats using OpenFoundationModels' PromptBuilder for declarative template syntax. The design eliminates unnecessary abstraction layers by having ModelCard directly process Transcript and GenerationOptions.
+
+### Simplified ModelCard Protocol
+
+```swift
+import OpenFoundationModels
+import MLXLMCommon
+
+public protocol ModelCard: Identifiable, Sendable where ID == String {
+    /// Model identifier (HuggingFace repo ID or local ID)
+    var id: String { get }
+    
+    /// Generate prompt directly from transcript and options
+    func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt
+    
+    /// Default generation parameters
+    var params: GenerateParameters { get }
+}
+```
+
+### Implementation Example: ChatGPT Template
+
+```swift
+import OpenFoundationModels
+import OpenFoundationModelsExtra
+
+public struct ChatGPTModelCard: ModelCard {
+    public let id = "gpt-4"
+    
+    public var params: GenerateParameters {
+        GenerateParameters(maxTokens: 4096, temperature: 0.7)
+    }
+    
+    public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
+        // Extract data directly
+        let ext = TranscriptAccess.extract(from: transcript)
+        let currentDate = ISO8601DateFormatter().string(from: Date())
+        let thinking = options?.metadata?["thinking"] as? Bool ?? false
+        let hasTools = !ext.toolDefs.isEmpty
+        
+        return Prompt {
+            // System message
+            "<|start|>system<|message|>"
+            "You are ChatGPT, a large language model trained by OpenAI.\n"
+            "Knowledge cutoff: 2024-06\n"
+            "Current date: \(currentDate)"
+            
+            // Thinking mode
+            if thinking {
+                "\n\nReasoning: medium"
+            }
+            
+            // Channel definitions
+            if thinking || hasTools {
+                "\n\n# Valid channels: "
+                if thinking { "analysis, " }
+                if hasTools { "commentary, " }
+                "final. Channel must be included for every message."
+            }
+            
+            "<|end|>"
+            
+            // Developer message (tools and system instructions)
+            if hasTools || ext.systemText != nil {
+                "\n<|start|>developer<|message|>"
+                
+                // Tool definitions
+                if hasTools {
+                    "# Tools\n\nnamespace functions {\n"
+                    for tool in ext.toolDefs {
+                        if let desc = tool.description {
+                            "// \(desc)\n"
+                        }
+                        "type \(tool.name) = ("
+                        if let params = tool.parametersJSON {
+                            "_: \(params)"
+                        }
+                        ") => any;\n"
+                    }
+                    "} // namespace functions\n"
+                }
+                
+                // System instructions
+                if let system = ext.systemText {
+                    "\n# Instructions\n\n\(system)"
+                }
+                
+                "<|end|>"
+            }
+            
+            // Message history
+            for message in ext.messages.filter({ $0.role != .system }) {
+                switch message.role {
+                case .user:
+                    "\n<|start|>user<|message|>\(message.content)<|end|>"
+                    
+                case .assistant:
+                    "\n<|start|>assistant"
+                    if thinking {
+                        "<|channel|>analysis"
+                    }
+                    "<|message|>\(message.content)<|end|>"
+                    
+                case .tool:
+                    "\n<|start|>functions.\(message.toolName ?? "unknown") to=assistant"
+                    "<|message|>\(message.content)<|end|>"
+                    
+                default:
+                    ""
+                }
+            }
+            
+            // Start assistant
+            "\n<|start|>assistant"
+            if thinking {
+                "<|channel|>analysis"
+            }
+        }
+    }
+}
+```
+
+### MLXLanguageModel Integration
+
+```swift
+public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
+    // Direct prompt generation
+    let prompt = card.prompt(transcript: transcript, options: options)
+    
+    // Extract necessary data for ChatRequest
+    let ext = TranscriptAccess.extract(from: transcript)
+    
+    // Build ChatRequest inline
+    let req = ChatRequest(
+        modelID: card.id,
+        prompt: prompt.description,
+        responseFormat: extractResponseFormat(ext),
+        sampling: OptionsMapper.map(options),
+        schema: extractSchema(ext),
+        parameters: options == nil ? card.params : nil
+    )
+    
+    // Execute...
+}
+```
+
+### Design Decisions
+
+1. **No Context Abstraction**: Direct processing of Transcript eliminates unnecessary layers
+2. **No PromptRenderer**: ModelCard handles all prompt generation, MLXLanguageModel builds ChatRequest
+3. **Simple Interface**: Single `prompt(transcript:options:)` method
+4. **Direct Data Access**: Extract and process data where needed
+5. **Model-Specific Logic**: Each ModelCard fully controls its template logic
+
+### Creating New ModelCards
+
+To add support for a new model format:
+
+1. Create a struct conforming to `ModelCard`
+2. Implement `prompt(transcript:options:)` using `@PromptBuilder` syntax
+3. Extract data from transcript using `TranscriptAccess`
+4. Define appropriate `params` for the model
+
+```swift
+public struct LlamaModelCard: ModelCard {
+    public let id = "llama-3"
+    
+    public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
+        let ext = TranscriptAccess.extract(from: transcript)
+        let currentDate = ISO8601DateFormatter().string(from: Date())
+        
+        return Prompt {
+            "<s>[INST] "
+            if let system = ext.systemText {
+                "<<SYS>>\n\(system)\nCurrent date: \(currentDate)\n<</SYS>>\n\n"
+            }
+            // Process messages directly
+            for message in ext.messages {
+                // Llama-specific formatting
+            }
+            " [/INST]"
+        }
+    }
+    
+    public var params: GenerateParameters { /* ... */ }
+}
+```
+
+### Architecture Benefits
+
+1. **Simplicity**: No intermediate abstractions or contexts
+2. **Flexibility**: Each model fully controls its logic
+3. **Performance**: No unnecessary object creation
+4. **Maintainability**: All logic in one place
+5. **Type Safety**: Direct use of Transcript and GenerationOptions
+
 ## Implementation Status
 
 ### ✅ Complete
@@ -795,6 +995,7 @@ class MLXLanguageModel {
 - Three-tier state management
 - Dynamic token discovery
 - Schema validation with Snap correction
+- ModelCard template system design
 
 ### 🚧 Known Limitations
 - Nested object constraints (top-level only)

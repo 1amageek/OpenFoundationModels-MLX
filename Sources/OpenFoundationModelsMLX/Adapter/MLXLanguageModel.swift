@@ -10,21 +10,18 @@ import MLXLMCommon
 public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     private let card: any ModelCard
     private let engine: MLXChatEngine
-    private let modelID: String
 
     /// Initialize with a pre-loaded ModelContainer and ModelCard.
     /// The model must be loaded separately using ModelLoader.
     /// - Parameters:
     ///   - modelContainer: Pre-loaded model from ModelLoader
     ///   - card: ModelCard that defines prompt rendering and parameters
-    ///   - modelID: Identifier for the model (for reference)
-    public init(modelContainer: ModelContainer, card: any ModelCard, modelID: String) async throws {
+    public init(modelContainer: ModelContainer, card: any ModelCard) async throws {
         self.card = card
-        self.modelID = modelID
         
         // Create backend with the pre-loaded model
         let backend = MLXBackend()
-        await backend.setModel(modelContainer, modelID: modelID)
+        await backend.setModel(modelContainer, modelID: card.id)
         
         // Initialize engine with the backend
         self.engine = MLXChatEngine(backend: backend)
@@ -34,10 +31,8 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     /// - Parameters:
     ///   - backend: Pre-configured MLXBackend with model already set
     ///   - card: ModelCard that defines prompt rendering and parameters
-    ///   - modelID: Identifier for the model
-    public init(backend: MLXBackend, card: any ModelCard, modelID: String) {
+    public init(backend: MLXBackend, card: any ModelCard) {
         self.card = card
-        self.modelID = modelID
         self.engine = MLXChatEngine(backend: backend)
     }
 
@@ -46,7 +41,48 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     public func supports(locale: Locale) -> Bool { true }
 
     public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
-        let req = try PromptRenderer.buildRequest(card: card, transcript: transcript, options: options)
+        // Generate prompt using ModelCard
+        let prompt = card.prompt(transcript: transcript, options: options)
+        
+        // Extract necessary data for ChatRequest
+        let ext = TranscriptAccess.extract(from: transcript)
+        
+        // Map transcript response format -> schema meta
+        let responseFormat: ResponseFormatSpec = {
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
+                return .jsonSchema(schemaJSON: schemaJSON) 
+            }
+            return .text
+        }()
+        
+        let schemaMeta: SchemaMeta? = {
+            switch responseFormat {
+            case .jsonSchema(let json):
+                if let data = json.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let keys = (dict["properties"] as? [String: Any])?.keys.map { String($0) } ?? []
+                    let required = (dict["required"] as? [String]) ?? []
+                    return SchemaMeta(keys: keys, required: required)
+                }
+                return nil
+            default: 
+                return nil
+            }
+        }()
+        
+        // Build ChatRequest
+        let sampling = OptionsMapper.map(options)
+        let directParams: GenerateParameters? = (options == nil) ? card.params : nil
+        
+        let req = ChatRequest(
+            modelID: card.id,
+            prompt: prompt.description,
+            responseFormat: responseFormat,
+            sampling: sampling,
+            schema: schemaMeta,
+            parameters: directParams
+        )
+        
         do {
             let res = try await engine.generate(req)
             // Convert the assistant text into a Transcript.Entry.response in a
@@ -73,14 +109,48 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     }
 
     public func stream(transcript: Transcript, options: GenerationOptions?) -> AsyncStream<Transcript.Entry> {
-        // Fail-fast: if request building fails, emit a single error entry and finish.
-        guard let req = try? PromptRenderer.buildRequest(card: card, transcript: transcript, options: options) else {
-            return AsyncStream { continuation in
-                continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: "[Error] Prompt rendering failed"))])))
-                continuation.finish()
+        // Generate prompt using ModelCard
+        let prompt = card.prompt(transcript: transcript, options: options)
+        
+        // Extract necessary data
+        let ext = TranscriptAccess.extract(from: transcript)
+        let expectsTool = ext.toolDefs.isEmpty == false
+        
+        // Map transcript response format -> schema meta
+        let responseFormat: ResponseFormatSpec = {
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
+                return .jsonSchema(schemaJSON: schemaJSON) 
             }
-        }
-        let expectsTool = TranscriptAccess.extract(from: transcript).toolDefs.isEmpty == false
+            return .text
+        }()
+        
+        let schemaMeta: SchemaMeta? = {
+            switch responseFormat {
+            case .jsonSchema(let json):
+                if let data = json.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let keys = (dict["properties"] as? [String: Any])?.keys.map { String($0) } ?? []
+                    let required = (dict["required"] as? [String]) ?? []
+                    return SchemaMeta(keys: keys, required: required)
+                }
+                return nil
+            default: 
+                return nil
+            }
+        }()
+        
+        // Build ChatRequest
+        let sampling = OptionsMapper.map(options)
+        let directParams: GenerateParameters? = (options == nil) ? card.params : nil
+        
+        let req = ChatRequest(
+            modelID: card.id,
+            prompt: prompt.description,
+            responseFormat: responseFormat,
+            sampling: sampling,
+            schema: schemaMeta,
+            parameters: directParams
+        )
         return AsyncStream { continuation in
             let task = Task {
                 let stream = await engine.stream(req)
