@@ -1,5 +1,6 @@
 import Testing
 @testable import OpenFoundationModelsMLX
+import Foundation
 import MLX
 import MLXLMCommon
 
@@ -44,7 +45,7 @@ struct MemoryManagementTests {
     @Test("Progress reporting")
     func progressReporting() async throws {
         let loader = ModelLoader()
-        let progress = Foundation.Progress(totalUnitCount: 100)
+        let progress = Progress(totalUnitCount: 100)
         
         // Test that progress is properly initialized
         #expect(progress.completedUnitCount == 0)
