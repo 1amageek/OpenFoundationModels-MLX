@@ -27,8 +27,7 @@ struct ChatRequest: Sendable {
     let prompt: String  // The final rendered prompt from ModelCard.render
     let responseFormat: ResponseFormatSpec
     let sampling: SamplingParameters
-    let schema: SchemaMeta?  // Legacy flat schema for backward compatibility
-    let schemaNode: SchemaNode?  // Hierarchical schema for nested object support
+    let schema: SchemaNode?  // Hierarchical schema for nested object support
     // If provided, backend should use these parameters as-is.
     let parameters: GenerateParameters?
     
@@ -37,15 +36,13 @@ struct ChatRequest: Sendable {
          prompt: String,
          responseFormat: ResponseFormatSpec,
          sampling: SamplingParameters,
-         schema: SchemaMeta? = nil,
-         schemaNode: SchemaNode? = nil,
+         schema: SchemaNode? = nil,
          parameters: GenerateParameters? = nil) {
         self.modelID = modelID
         self.prompt = prompt
         self.responseFormat = responseFormat
         self.sampling = sampling
         self.schema = schema
-        self.schemaNode = schemaNode
         self.parameters = parameters
     }
 }

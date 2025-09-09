@@ -11,7 +11,7 @@ struct MLXChatClient: Sendable {
         var prompt: String  // Pre-rendered prompt from ModelCard
         var responseFormat: ResponseFormatSpec = .text
         var sampling: SamplingParameters = .init(temperature: nil, topP: nil, topK: nil, maxTokens: nil, stop: nil, seed: nil)
-        var schema: SchemaMeta? = nil
+        var schema: SchemaNode? = nil
         
         // Direct prompt initializer (the only way now)
         init(card: any ModelCard, prompt: String) {

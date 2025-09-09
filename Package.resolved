@@ -1,5 +1,5 @@
 {
-  "originHash" : "572f80f2ce1fd8a8d2cd8eb081be6d29d28e077ea396a7989a014c7127a10744",
+  "originHash" : "e1fe6d4ceb1d544306177e36ba6e78e2fdea5766489c04018328fa81d1e55d5d",
   "pins" : [
     {
       "identity" : "gzipswift",
@@ -43,7 +43,7 @@
       "location" : "https://github.com/1amageek/OpenFoundationModels",
       "state" : {
         "branch" : "main",
-        "revision" : "fb37e91f2b523c5df418f5eb521baa415fb598e3"
+        "revision" : "50d8fa658ddfda971b778d9604f55ba240adfdcc"
       }
     },
     {

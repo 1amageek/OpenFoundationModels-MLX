@@ -83,24 +83,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             }
         }()
         
-        // Also create legacy SchemaMeta for backward compatibility
-        let schemaMeta: SchemaMeta? = {
-            guard let node = schemaNode else { return nil }
-            // Flatten all keys for legacy compatibility
-            var allKeys: [String] = []
-            func collectKeys(from node: SchemaNode) {
-                if node.kind == .object {
-                    allKeys.append(contentsOf: node.objectKeys)
-                    for (_, child) in node.properties {
-                        collectKeys(from: child)
-                    }
-                } else if node.kind == .array, let items = node.items {
-                    collectKeys(from: items)
-                }
-            }
-            collectKeys(from: node)
-            return SchemaMeta(keys: allKeys, required: Array(node.required))
-        }()
         
         // Build ChatRequest
         let sampling = OptionsMapper.map(options)
@@ -111,7 +93,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             prompt: prompt.description,
             responseFormat: responseFormat,
             sampling: sampling,
-            schema: schemaMeta,
+            schema: schemaNode,
             parameters: directParams
         )
         
@@ -176,24 +158,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             }
         }()
         
-        // Also create legacy SchemaMeta for backward compatibility
-        let schemaMeta: SchemaMeta? = {
-            guard let node = schemaNode else { return nil }
-            // Flatten all keys for legacy compatibility
-            var allKeys: [String] = []
-            func collectKeys(from node: SchemaNode) {
-                if node.kind == .object {
-                    allKeys.append(contentsOf: node.objectKeys)
-                    for (_, child) in node.properties {
-                        collectKeys(from: child)
-                    }
-                } else if node.kind == .array, let items = node.items {
-                    collectKeys(from: items)
-                }
-            }
-            collectKeys(from: node)
-            return SchemaMeta(keys: allKeys, required: Array(node.required))
-        }()
         
         // Build ChatRequest
         let sampling = OptionsMapper.map(options)
@@ -204,7 +168,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             prompt: prompt.description,
             responseFormat: responseFormat,
             sampling: sampling,
-            schema: schemaMeta,
+            schema: schemaNode,
             parameters: directParams
         )
         return AsyncStream { continuation in

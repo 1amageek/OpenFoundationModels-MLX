@@ -91,8 +91,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     private let specialTokens: MLXLLMTokenizer.SpecialTokens
     private let maskHintGenerator: JSONMaskHintGenerator
     
-    // For backward compatibility
-    private let legacyTrie: TokenTrie?
     
     // MARK: - Context Stack for Nested Objects
     private enum Context: Sendable {
@@ -157,10 +155,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         // Build schema index if schema provided
         if let schema = schema {
             self.schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
-            self.legacyTrie = nil
         } else {
             self.schemaIndex = nil
-            self.legacyTrie = nil
         }
         
         // 軽量状態の初期化
@@ -179,47 +175,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         )
         self.lightweightState = Mutex(initialSnapshot)
         
-        if let schema = schema {
-            print("🚀 [TokenTrieLogitProcessor] Initialized with nested schema")
-            print("📋 [TokenTrieLogitProcessor] Root keys: \(schema.objectKeys)")
-        }
     }
     
-    // Legacy init for backward compatibility
-    public init(schema: SchemaMeta, tokenizer: any Tokenizer) {
-        // Convert SchemaMeta to simple SchemaNode
-        let node = SchemaNode(
-            kind: .object,
-            properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
-            required: Set(schema.required)
-        )
-        
-        // Also keep legacy trie for fallback
-        let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
-        let legacyTrie = TokenTrieBuilder.buildCached(schema: schema, tokenizer: adapter)
-        
-        self.schemaRoot = node
-        self.tokenizer = tokenizer
-        self.tokenizerAdapter = adapter
-        self.specialTokens = adapter.findSpecialTokens()
-        self.maskHintGenerator = JSONMaskHintGenerator.forSchemaConstrainedDecoding(
-            specialTokens: specialTokens,
-            includeWhitespace: false
-        )
-        self.schemaIndex = SchemaTrieIndex(root: node, tokenizer: adapter)
-        self.legacyTrie = legacyTrie
-        
-        let initialPath = TokenTrie.Path()
-        let initialSnapshot = ProcessorSnapshot(
-            tokenPath: initialPath,
-            contextStack: [.object(node)],
-            currentObjectNode: node
-        )
-        self.lightweightState = Mutex(initialSnapshot)
-        
-        print("🚀 [TokenTrieLogitProcessor] Initialized with legacy SchemaMeta")
-        print("📋 [TokenTrieLogitProcessor] Schema keys: \(schema.keys)")
-    }
     
     // MARK: - LogitProcessor Protocol
     
@@ -262,11 +219,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     private func getCurrentTrie() -> TokenTrie? {
         let snap = lightweightState.withLock { $0 }
         
-        // Use legacy trie if available (backward compatibility)
-        if let legacyTrie = legacyTrie {
-            return legacyTrie
-        }
-        
         // Get trie for current object node
         if let node = snap.currentObjectNode,
            let index = schemaIndex {
@@ -290,13 +242,11 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                childNode.kind == .object {
                 newStack.append(.object(childNode))
                 newObjectNode = childNode
-                print("📦 [Context] Entering nested object for key '\(key)', new keys: \(childNode.objectKeys)")
             } else {
                 // Unknown object structure
                 let emptyNode = SchemaNode(kind: .object)
                 newStack.append(.object(emptyNode))
                 newObjectNode = emptyNode
-                print("⚠️ [Context] Entering unknown object")
             }
             newPendingKey = nil
             
@@ -307,10 +257,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                let childNode = parentNode.properties[key],
                childNode.kind == .array {
                 newStack.append(.array(childNode.items))
-                print("📦 [Context] Entering array for key '\(key)'")
             } else {
                 newStack.append(.array(nil))
-                print("⚠️ [Context] Entering unknown array")
             }
             newPendingKey = nil
             
@@ -348,11 +296,9 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                         break
                     }
                 }
-                print("📦 [Context] Exited object, returning to parent")
                 break
                 
             case (.array, .array):
-                print("📦 [Context] Exited array")
                 break
                 
             default:
@@ -405,8 +351,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             )
         }
         
-        print("📊 [TokenTrieLogitProcessor] Phase: \(snap.jsonPhase), IsInKey: \(isInKey)")
-        print("📊 [TokenTrieLogitProcessor] Token path: \(snap.tokenPath.tokens)")
 
         // 4) 許可集合の構築
         var allowed = Set<Int32>()
@@ -416,25 +360,21 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             // キー中: 現在のコンテキストのTrieの許可集合
             if let trie = currentTrie {
                 allowed = trie.getAllowedTokens(for: snap.tokenPath)
-                print("🔑 [TokenTrieLogitProcessor] In key state with context '\(snap.currentObjectNode?.objectKeys ?? [])', allowed tokens: \(allowed.count)")
                 
                 // 末端ならクォート（単体がなければ動的候補）とエスケープを許可
                 if snap.tokenPath.isAtTerminal() {
                     let quoteCandidates = dynamicQuoteCandidates(from: logits, fallback: specialTokens.quoteTokens)
-                    print("📝 [TokenTrieLogitProcessor] Terminal: adding \(quoteCandidates.count) quote candidates")
                     allowed.formUnion(quoteCandidates)
                     allowed.formUnion(specialTokens.backslashTokens)
                 }
             } else {
                 // No trie available - allow any tokens
-                print("⚠️ [TokenTrieLogitProcessor] No trie for current context, allowing all tokens")
                 allowed = Set(0..<Int32(logits.dim(logits.ndim - 1)))
             }
 
             // キー中はintersectionを行わない（動的クォート候補を潰さないため）
             // 構文側のhintは無視し、Trieの制約のみを信頼する
             useHardMask = true
-            print("🔒 [TokenTrieLogitProcessor] Final allowed in key: \(allowed.count) tokens")
 
             // 途中で継続不能なら即エラー
             if allowed.isEmpty && !snap.tokenPath.isAtTerminal() {
@@ -445,21 +385,16 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             }
         } else {
             // キー外: 構文ヒントに従う（hard は物理マスク、soft は後段でバイアス）
-            print("🔍 [TokenTrieLogitProcessor] Not in key state")
             if let h = hint {
-                print("💡 [TokenTrieLogitProcessor] Hint mode: \(h.mode), allow: \(h.allow.count), prefer: \(h.prefer.count)")
                 switch h.mode {
                 case .hard:
                     allowed = h.allow
                     useHardMask = true
-                    print("🔒 [TokenTrieLogitProcessor] Using hard mask with \(allowed.count) allowed tokens")
                 case .soft:
                     // allowed は空のまま（素通し）→ prefer を後でバイアス
-                    print("🔓 [TokenTrieLogitProcessor] Using soft bias")
                     break
                 }
             } else {
-                print("❓ [TokenTrieLogitProcessor] No hint available")
             }
         }
 
@@ -545,7 +480,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             let wasInKey = isInKeyState(phase: prevSnapshot.jsonPhase)
             let nowInKey = isInKeyState(phase: newPhase)
             
-            print("🔄 [didSample] Phase transition: wasInKey=\(wasInKey), nowInKey=\(nowInKey), text='\(generatedText)'")
             
             // Get current trie for key tracking
             let currentTrie = getCurrentTrie()
@@ -566,7 +500,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                 // いまキーが閉じた → キー名を記録して次のキーに備える
                 if prevSnapshot.tokenPath.isAtTerminal() {
                     newPendingKey = prevSnapshot.tokenPath.getKeyName()
-                    print("🔑 [didSample] Key closed: '\(newPendingKey ?? "unknown")'、resetting path")
                 }
                 if let trie = currentTrie {
                     newTokenPath.reset(to: trie.root)
@@ -578,6 +511,9 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             // Handle context transitions based on JSON structure
             // Check for object/array entry
             if generatedText.contains("{") {
+                if let key = newPendingKey {
+                }
+                
                 if let key = newPendingKey,
                    let parentNode = newObjectNode,
                    let childNode = parentNode.properties[key],
@@ -585,13 +521,11 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                     // Entering nested object with known schema
                     newContextStack.append(.object(childNode))
                     newObjectNode = childNode
-                    print("📦 [didSample] Entering object '\(key)' with keys: \(childNode.objectKeys)")
                 } else {
                     // Entering unknown object
                     let emptyNode = SchemaNode(kind: .object)
                     newContextStack.append(.object(emptyNode))
                     newObjectNode = emptyNode
-                    print("⚠️ [didSample] Entering unknown object")
                 }
                 newPendingKey = nil
                 // Reset path for new object context
@@ -606,10 +540,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                    let childNode = parentNode.properties[key],
                    childNode.kind == .array {
                     newContextStack.append(.array(childNode.items))
-                    print("📦 [didSample] Entering array '\(key)'")
                 } else {
                     newContextStack.append(.array(nil))
-                    print("⚠️ [didSample] Entering unknown array")
                 }
                 newPendingKey = nil
             }
@@ -634,7 +566,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                    let trie = schemaIndex?.trie(for: node) {
                     newTokenPath.reset(to: trie.root)
                 }
-                print("📦 [didSample] Exited object, returning to parent")
             }
             
             if generatedText.contains("]") {
@@ -643,7 +574,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                     newContextStack.removeLast()
                     if case .array = last { break }
                 }
-                print("📦 [didSample] Exited array")
             }
             
             // Clear pending key on value start (non-object/array)
@@ -812,8 +742,12 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
 extension TokenTrieLogitProcessor {
     /// Convenience initializer with default settings
     public convenience init(keys: [String], tokenizer: any Tokenizer) {
-        let schema = SchemaMeta(keys: keys, required: [])
-        self.init(schema: schema, tokenizer: tokenizer)
+        let node = SchemaNode(
+            kind: .object,
+            properties: Dictionary(uniqueKeysWithValues: keys.map { ($0, SchemaNode.any) }),
+            required: []
+        )
+        self.init(schema: node, tokenizer: tokenizer)
     }
     
     public func validateGenerated() -> Bool {

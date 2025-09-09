@@ -36,12 +36,9 @@ actor MLXChatEngine {
         }
         
         let text: String
-        if let schemaNode = req.schemaNode {
-            // Use hierarchical schema if available
+        if let schemaNode = req.schema {
+            // Use hierarchical schema
             text = try await backend.generateTextWithSchema(prompt: prompt, sampling: sampling, schema: schemaNode)
-        } else if let schema = req.schema {
-            // Fallback to legacy flat schema
-            text = try await backend.generateTextConstrained(prompt: prompt, sampling: sampling, schema: schema)
         } else {
             text = try await backend.generateText(prompt: prompt, sampling: sampling)
         }
@@ -50,15 +47,9 @@ actor MLXChatEngine {
         switch req.responseFormat {
         case .text: break
         case .jsonSchema:
-            if let schemaNode = req.schemaNode {
+            if let schemaNode = req.schema {
                 // Validate with hierarchical schema
                 if JSONValidator.validate(text: text, schema: schemaNode) == false { 
-                    throw ValidationError.schemaUnsatisfied 
-                }
-            } else if let meta = req.schema {
-                // Fallback to legacy validation
-                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                if validator.validate(text: text, schema: meta) == false { 
                     throw ValidationError.schemaUnsatisfied 
                 }
             }
@@ -81,7 +72,7 @@ actor MLXChatEngine {
         case .text: hasSchema = false; schemaKeys = []
         case .jsonSchema:
             hasSchema = true
-            schemaKeys = req.schema?.keys ?? []
+            schemaKeys = req.schema?.objectKeys ?? []
         case .jsonSchemaRef:
             hasSchema = false; schemaKeys = []
         }
@@ -177,9 +168,8 @@ actor MLXChatEngine {
 
                     // Validate complete JSON - fail immediately if invalid
                     if case .jsonSchema = req.responseFormat,
-                       let meta = req.schema {
-                        let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                        if validator.validate(text: buffer, schema: meta) == false {
+                       let schemaNode = req.schema {
+                        if JSONValidator.validate(text: buffer, schema: schemaNode) == false {
                             continuation.finish(throwing: ValidationError.schemaUnsatisfied)
                             return
                         }

@@ -41,6 +41,7 @@ let package = Package(
                 "OpenFoundationModelsMLX",
                 .product(name: "OpenFoundationModels", package: "OpenFoundationModels"),
                 .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels"),
+                .product(name: "OpenFoundationModelsMacros", package: "OpenFoundationModels"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
             ]
         ),

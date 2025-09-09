@@ -14,27 +14,37 @@ OpenFoundationModels-MLX is a production-ready MLX adapter for OpenFoundationMod
 
 ### System Definition
 
-ADAPT is a token-level constraint system that guarantees JSON generation conforms to specified schemas through four integrated subsystems:
+ADAPT is a token-level constraint system that guarantees JSON generation conforms to specified schemas through four integrated subsystems. The system now supports **hierarchical JSON schemas** with nested objects and arrays, enabling constraint switching based on the current JSON context.
 
-1. **TokenTrie Engine (TTE)** - Efficient token constraint management
-2. **Phase-Aware Navigator (PAN)** - JSON state tracking and constraint selection
+1. **TokenTrie Engine (TTE)** - Efficient token constraint management with per-object Trie indexing
+2. **Phase-Aware Navigator (PAN)** - JSON state tracking and constraint selection with context stack
 3. **Constraint Optimizer (CO)** - GPU-optimized logit manipulation
 4. **Recovery Manager (RM)** - Error detection and correction
 
-### Architectural Requirements
+### Architectural Components
+
+#### Hierarchical Schema Support
+
+ADAPT now processes hierarchical JSON schemas through:
+
+- **SchemaNode**: Tree structure representing nested JSON schemas
+- **SchemaBuilder**: Converts JSON Schema dictionaries to SchemaNode trees
+- **SchemaTrieIndex**: Maintains separate TokenTrie for each object in the schema hierarchy
+- **Context Stack**: Tracks current position in nested JSON structure
 
 ```mermaid
 graph TB
     subgraph "Input Layer"
-        Schema[JSON Schema<br/>Array of Keys]
+        Schema[Hierarchical JSON Schema<br/>SchemaNode Tree]
         Tokenizer[HuggingFace Tokenizer<br/>swift-transformers]
         Logits[Model Logits<br/>MLXArray]
     end
     
     subgraph "ADAPT Core"
-        TLP[TokenTrieLogitProcessor<br/>LogitProcessor Protocol]
+        TLP[TokenTrieLogitProcessor<br/>with Context Stack]
         
         subgraph "TTE Subsystem"
+            STI[SchemaTrieIndex<br/>Per-Object Tries]
             TT[TokenTrie<br/>Prefix Tree Structure]
             TTB[TokenTrieBuilder<br/>with Cache]
             Path[Path Tracker<br/>State Management]
@@ -64,9 +74,9 @@ graph TB
         JSON[Valid JSON<br/>Schema Compliant]
     end
     
-    Schema --> TTB
-    Tokenizer --> TTB
-    TTB --> TT
+    Schema --> STI
+    Tokenizer --> STI
+    STI --> TT
     TT --> Path
     
     Logits --> TLP
@@ -231,6 +241,118 @@ let container = try await loader.loadModel("model-id", progress: progress)
 
 ## ADAPT Implementation Specification
 
+### Hierarchical Schema Support
+
+ADAPT now supports nested JSON structures through a hierarchical schema system that dynamically switches constraints based on the current context in the JSON structure.
+
+#### SchemaNode - Hierarchical Schema Representation
+
+```swift
+public final class SchemaNode: @unchecked Sendable {
+    public enum Kind: Sendable {
+        case object, array, string, number, boolean, null, any
+    }
+    
+    public let kind: Kind
+    public let properties: [String: SchemaNode]  // For objects
+    public let required: Set<String>             // Required keys
+    public let items: SchemaNode?                // For arrays
+    
+    // Get keys for this object node
+    public var objectKeys: [String] {
+        guard kind == .object else { return [] }
+        return properties.keys.sorted()
+    }
+}
+```
+
+#### SchemaBuilder - JSON Schema Conversion
+
+Converts JSON Schema dictionaries (from @Generable or manual schemas) into hierarchical SchemaNode trees:
+
+```swift
+public enum SchemaBuilder {
+    static func fromJSONSchema(_ dict: [String: Any]) -> SchemaNode {
+        // Recursively process nested objects and arrays
+        // Handle union types like ["object", "null"]
+        // Build complete schema tree
+    }
+}
+```
+
+#### SchemaTrieIndex - Per-Object TokenTrie Management
+
+Creates and manages separate TokenTrie for each object in the schema hierarchy:
+
+```swift
+public struct SchemaTrieIndex: Sendable {
+    public let root: SchemaNode
+    private let triesByNode: [ObjectIdentifier: TokenTrie]
+    
+    public init(root: SchemaNode, tokenizer: TokenizerAdapter) {
+        // Build TokenTrie for each object node
+        // Store by ObjectIdentifier for O(1) lookup
+    }
+    
+    public func trie(for node: SchemaNode) -> TokenTrie? {
+        // Get the appropriate Trie for current context
+    }
+}
+```
+
+#### Context-Aware Processing Flow
+
+1. **Entering Nested Object**: When `"contact": {` is detected:
+   - Store `pendingKey = "contact"`
+   - On `{` token, look up `properties["contact"]`
+   - Push new object context to stack
+   - Switch to contact's TokenTrie (with keys: email, phone)
+
+2. **Key Constraint in Nested Context**: Inside contact object:
+   - Use contact's TokenTrie for key validation
+   - Only "email" and "phone" are allowed
+   - Hard mask applied to enforce constraints
+
+3. **Exiting Nested Object**: When `}` is detected:
+   - Pop object context from stack
+   - Return to parent's TokenTrie
+   - Continue with parent's key constraints
+
+#### Example: PersonProfile with ContactInfo
+
+```swift
+@Generable
+struct PersonProfile {
+    var name: String
+    var age: Int
+    var occupation: String
+    var hobbies: [String]?
+    var contact: ContactInfo?
+    
+    @Generable
+    struct ContactInfo {
+        var email: String
+        var phone: String?
+    }
+}
+```
+
+Generated Schema Hierarchy:
+```
+PersonProfile (root)
+├── name: string
+├── age: number
+├── occupation: string
+├── hobbies: array<string>
+└── contact: object
+    ├── email: string
+    └── phone: string
+```
+
+TokenTrie Creation:
+- Root Trie: ["name", "age", "occupation", "hobbies", "contact"]
+- Contact Trie: ["email", "phone"]
+
 ### 1. TokenTrie Engine (TTE) Specification
 
 #### Data Structure Requirements
@@ -330,6 +452,45 @@ public struct JSONMaskHintGenerator {
             return nil                   // NO constraints
         }
     }
+}
+```
+
+### Critical Implementation Details
+
+#### Single-Token Key Handling
+
+ADAPT handles keys that tokenize to single tokens (like "name", "age") through dynamic quote discovery:
+
+1. **A-1 Fix: Skip Intersection for Key Tokens**
+   - When in key generation phase, do NOT intersect with vocabulary mask
+   - Preserves dynamically discovered quote candidates
+   - Critical for single-token keys where quote is part of the same token
+
+2. **B Fix: Use New Phase in didSample**
+   - Must use the NEW phase after processing character, not the old phase
+   - Ensures correct state transitions for terminal detection
+   - Prevents premature phase changes
+
+3. **Dynamic Quote Discovery**
+   - When standalone quote token doesn't exist, find tokens containing quotes
+   - Search top-K logits for quote-containing tokens
+   - Essential for tokenizers that merge quotes with other characters
+
+```swift
+// Critical: No intersection when in key phase
+if isInKey {
+    allowed = tokenTrie.getAllowedTokens(for: snap.tokenPath)
+    if snap.tokenPath.isAtTerminal() {
+        let quoteCandidates = dynamicQuoteCandidates(from: logits)
+        allowed.formUnion(quoteCandidates)
+    }
+    // NO intersection - preserves dynamic candidates
+}
+
+// Critical: Use NEW phase for state updates
+let newPhase = snap.jsonPhase  // After character processing
+if case .inString(.body(kind: .key, _)) = newPhase {
+    // Update based on new phase, not old
 }
 ```
 
@@ -502,30 +663,58 @@ sequenceDiagram
 
 ### State Management Architecture
 
+The TokenTrieLogitProcessor now maintains context-aware state for nested object support:
+
 ```swift
-// Three-tier state for optimal concurrency
 public final class TokenTrieLogitProcessor: LogitProcessor {
-    // Tier 1: Fast reads (most frequent access)
+    // Immutable references
+    private let schemaRoot: SchemaNode?
+    private let schemaIndex: SchemaTrieIndex?
+    
+    // Context tracking for nested objects
+    private enum Context: Sendable {
+        case object(SchemaNode)
+        case array(SchemaNode?)
+    }
+    
+    // Lightweight state with context stack
     private let lightweightState: Mutex<ProcessorSnapshot>
     struct ProcessorSnapshot {
         let jsonPhase: JSONStateMachine.Phase
         let tokenPath: TokenTrie.Path
         let isGenerating: Bool
         let tokenCount: Int
+        let contextStack: [Context]           // Track nesting level
+        let pendingKey: String?               // Last confirmed key name
+        let currentObjectNode: SchemaNode?    // Current object's schema
     }
     
-    // Tier 2: Complex updates (less frequent)
+    // Context-aware Trie selection
+    private func getCurrentTrie() -> TokenTrie? {
+        let snap = lightweightState.withLock { $0 }
+        if let node = snap.currentObjectNode,
+           let index = schemaIndex {
+            return index.trie(for: node)
+        }
+        return nil
+    }
+    
+    // Complex state updates
     private let heavyState: Mutex<HeavyState>
     struct HeavyState {
         var jsonStateMachine: JSONStateMachine
-        var keyTracker: JSONKeyTracker
         var generatedTokens: [Int32]
     }
-    
-    // Tier 3: Error tracking (atomic operations)
-    private let errorState: Mutex<JSONGenerationError?>
 }
 ```
+
+#### Context Switching Logic
+
+1. **Key Detection**: When a key string closes, store it as `pendingKey`
+2. **Value Type Detection**: When `:` is followed by `{` or `[`
+3. **Context Push**: Create new context based on schema lookup
+4. **Trie Switch**: Get TokenTrie for new object context
+5. **Context Pop**: On `}` or `]`, return to parent context
 
 ## Build and Development Commands
 

@@ -66,7 +66,7 @@ actor GenerationOrchestrator {
                 
                 // Choose generation method based on schema presence
                 // Prefer hierarchical schema if available
-                if let schemaNode = request.schemaNode {
+                if let schemaNode = request.schema {
                     print("🔍 [GenerationOrchestrator] Using ADAPT with hierarchical schema")
                     print("📋 [GenerationOrchestrator] Root keys: \(schemaNode.objectKeys)")
                     print("📋 [GenerationOrchestrator] Required: \(schemaNode.required)")
@@ -74,24 +74,6 @@ actor GenerationOrchestrator {
                         executor: executor,
                         prompt: prompt,
                         schema: schemaNode,
-                        parameters: sampling
-                    )
-                    print("✅ [GenerationOrchestrator] ADAPT generation complete: \(text)")
-                } else if let schema = request.schema {
-                    // Fallback to legacy flat schema
-                    print("🔍 [GenerationOrchestrator] Using ADAPT with legacy schema")
-                    print("📋 [GenerationOrchestrator] Schema keys: \(schema.keys)")
-                    print("📋 [GenerationOrchestrator] Required: \(schema.required)")
-                    // Convert to SchemaNode for ADAPT
-                    let node = SchemaNode(
-                        kind: .object,
-                        properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
-                        required: Set(schema.required)
-                    )
-                    text = try await adaptEngine.generateWithSchema(
-                        executor: executor,
-                        prompt: prompt,
-                        schema: node,
                         parameters: sampling
                     )
                     print("✅ [GenerationOrchestrator] ADAPT generation complete: \(text)")
@@ -111,11 +93,8 @@ actor GenerationOrchestrator {
                 // Post-generation validation if needed
                 if case .jsonSchema = request.responseFormat {
                     let isValid: Bool
-                    if let schemaNode = request.schemaNode {
+                    if let schemaNode = request.schema {
                         isValid = JSONValidator.validate(text: text, schema: schemaNode)
-                    } else if let schema = request.schema {
-                        let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                        isValid = validator.validate(text: text, schema: schema)
                     } else {
                         isValid = true  // No schema to validate against
                     }
@@ -153,8 +132,6 @@ actor GenerationOrchestrator {
     /// - Parameter request: The chat request
     /// - Returns: Stream of chat chunks
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
-        let hasSchema = request.schemaNode != nil || request.schema != nil
-        let schemaKeys = request.schema?.keys ?? []
         
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -162,7 +139,7 @@ actor GenerationOrchestrator {
                     let prompt = request.prompt
                     let sampling = convertParameters(request)
                     
-                    if let schemaNode = request.schemaNode {
+                    if let schemaNode = request.schema {
                         // Stream with hierarchical ADAPT constraints
                         let stream = await adaptEngine.streamWithSchema(
                             executor: executor,
@@ -175,77 +152,6 @@ actor GenerationOrchestrator {
                         for try await chunk in stream {
                             let delta = ChatDelta(deltaText: chunk, finishReason: nil)
                             continuation.yield(ChatChunk(deltas: [delta]))
-                        }
-                    } else if let schema = request.schema {
-                        // Stream with legacy flat schema
-                        let node = SchemaNode(
-                            kind: .object,
-                            properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
-                            required: Set(schema.required)
-                        )
-                        let stream = await adaptEngine.streamWithSchema(
-                            executor: executor,
-                            prompt: prompt,
-                            schema: node,
-                            parameters: sampling
-                        )
-                        
-                        // Buffer for validation if needed
-                        if hasSchema && !schemaKeys.isEmpty {
-                            var buffer = ""
-                            let bufferLimit = maxBufferSizeKB * 1024
-                            var tracker = JSONKeyTracker(schemaKeys: schemaKeys)
-                            let jsonState = JSONStateMachine()
-                            
-                            for try await chunk in stream {
-                                buffer += chunk
-                                
-                                // Check buffer limit
-                                if buffer.utf8.count > bufferLimit {
-                                    Logger.warning("[GenerationOrchestrator] Buffer exceeded limit")
-                                    throw OrchestratorError.bufferLimitExceeded
-                                }
-                                
-                                // Update JSON state
-                                for char in chunk {
-                                    jsonState.processCharacter(char)
-                                }
-                                
-                                // Check for completion
-                                if jsonState.isComplete() {
-                                    continuation.yield(ChatChunk(deltas: [.init(deltaText: chunk, finishReason: "stop")]))
-                                    continuation.finish()
-                                    return
-                                }
-                                
-                                // Check for errors
-                                if jsonState.isError() {
-                                    throw OrchestratorError.jsonMalformed
-                                }
-                                
-                                // Track violations
-                                tracker.consume(chunk)
-                                if tracker.violationCount >= 3 {
-                                    throw OrchestratorError.schemaViolations
-                                }
-                                
-                                // Yield chunk
-                                continuation.yield(ChatChunk(deltas: [.init(deltaText: chunk, finishReason: nil)]))
-                            }
-                            
-                            // Final validation
-                            if case .jsonSchema = request.responseFormat,
-                               let meta = request.schema {
-                                let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-                                if !validator.validate(text: buffer, schema: meta) {
-                                    throw OrchestratorError.validationFailed
-                                }
-                            }
-                        } else {
-                            // Pass through without buffering
-                            for try await chunk in stream {
-                                continuation.yield(ChatChunk(deltas: [.init(deltaText: chunk, finishReason: nil)]))
-                            }
                         }
                     } else {
                         // Direct streaming without constraints

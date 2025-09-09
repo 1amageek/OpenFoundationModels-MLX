@@ -82,23 +82,16 @@ public actor MLXBackend {
     func generateTextConstrained(
         prompt: String,
         sampling: SamplingParameters,
-        schema: SchemaMeta
+        schema: SchemaNode
     ) async throws -> String {
         guard await hasModel() else {
             throw MLXBackendError.noModelSet
         }
         
-        // Convert SchemaMeta to SchemaNode for ADAPT
-        let node = SchemaNode(
-            kind: .object,
-            properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
-            required: Set(schema.required)
-        )
-        
         return try await adaptEngine.generateWithSchema(
             executor: executor,
             prompt: prompt,
-            schema: node,
+            schema: schema,
             parameters: sampling
         )
     }
@@ -161,7 +154,7 @@ public actor MLXBackend {
     func streamTextConstrained(
         prompt: String,
         sampling: SamplingParameters,
-        schema: SchemaMeta
+        schema: SchemaNode
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -170,17 +163,10 @@ public actor MLXBackend {
                     return
                 }
                 
-                // Convert SchemaMeta to SchemaNode for ADAPT
-                let node = SchemaNode(
-                    kind: .object,
-                    properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
-                    required: Set(schema.required)
-                )
-                
                 let stream = await adaptEngine.streamWithSchema(
                     executor: executor,
                     prompt: prompt,
-                    schema: node,
+                    schema: schema,
                     parameters: sampling
                 )
                 
@@ -237,13 +223,13 @@ public actor MLXBackend {
     ) async throws -> T {
         // For now, we need to manually specify the schema keys
         // In a real implementation, this would be extracted from the Decodable type
-        let schemaMeta = SchemaMeta(keys: [], required: [])
+        let schemaNode = SchemaNode(kind: .object, properties: [:], required: [])
         
         // Generate constrained text
         let jsonText = try await generateTextConstrained(
             prompt: prompt,
             sampling: sampling,
-            schema: schemaMeta
+            schema: schemaNode
         )
         
         // Parse JSON

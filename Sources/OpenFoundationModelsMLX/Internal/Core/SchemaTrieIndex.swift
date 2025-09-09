@@ -7,6 +7,7 @@ public struct SchemaTrieIndex: Sendable {
     
     public let root: SchemaNode
     private let triesByNode: [ObjectIdentifier: TokenTrie]
+    private let triesByKeys: [String: TokenTrie]  // Fallback mapping by key signature
     
     /// Build the index by creating a TokenTrie for each object node
     /// - Parameters:
@@ -16,6 +17,7 @@ public struct SchemaTrieIndex: Sendable {
         self.root = root
         
         var triesMap: [ObjectIdentifier: TokenTrie] = [:]
+        var keyTriesMap: [String: TokenTrie] = [:]
         
         // Recursively build tries for all object nodes
         func buildTries(for node: SchemaNode, path: String = "root") {
@@ -26,16 +28,18 @@ public struct SchemaTrieIndex: Sendable {
                 // Build trie for this object's keys
                 let keys = node.objectKeys
                 if !keys.isEmpty {
-                    print("🌳 [SchemaTrieIndex] Building trie for \(path) with keys: \(keys)")
                     let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
                     triesMap[nodeId] = trie
+                    
+                    // Create fallback key signature and store trie
+                    let keySignature = keys.joined(separator: ",")
+                    keyTriesMap[keySignature] = trie
                 } else {
-                    print("⚠️ [SchemaTrieIndex] Object at \(path) has no keys")
                 }
                 
                 // Recursively process child properties
                 for (key, child) in node.properties {
-                    buildTries(for: child, path: "\(path).\(key)")
+                        buildTries(for: child, path: "\(path).\(key)")
                 }
                 
             case .array:
@@ -52,8 +56,8 @@ public struct SchemaTrieIndex: Sendable {
         
         buildTries(for: root)
         self.triesByNode = triesMap
+        self.triesByKeys = keyTriesMap
         
-        print("✅ [SchemaTrieIndex] Built index with \(triesMap.count) tries")
     }
     
     /// Get the TokenTrie for a specific schema node
@@ -61,15 +65,26 @@ public struct SchemaTrieIndex: Sendable {
     /// - Returns: TokenTrie if the node is an object with keys, nil otherwise
     public func trie(for node: SchemaNode) -> TokenTrie? {
         let nodeId = ObjectIdentifier(node)
-        let result = triesByNode[nodeId]
         
-        if result != nil {
-            print("🔍 [SchemaTrieIndex] Found trie for node with keys: \(node.objectKeys)")
-        } else if node.kind == .object {
-            print("⚠️ [SchemaTrieIndex] No trie found for object node")
+        // Try primary lookup by ObjectIdentifier
+        if let result = triesByNode[nodeId] {
+            return result
         }
         
-        return result
+        // Fallback to key signature lookup for object nodes
+        if node.kind == .object {
+            let keys = node.objectKeys
+            if !keys.isEmpty {
+                let keySignature = keys.joined(separator: ",")
+                if let fallbackResult = triesByKeys[keySignature] {
+                    return fallbackResult
+                } else {
+                }
+            } else {
+            }
+        }
+        
+        return nil
     }
     
     /// Get all tries in the index (for debugging)
@@ -79,6 +94,22 @@ public struct SchemaTrieIndex: Sendable {
     
     /// Check if a node has an associated trie
     public func hasTrie(for node: SchemaNode) -> Bool {
-        triesByNode[ObjectIdentifier(node)] != nil
+        let nodeId = ObjectIdentifier(node)
+        
+        // Try primary lookup
+        if triesByNode[nodeId] != nil {
+            return true
+        }
+        
+        // Try fallback for object nodes
+        if node.kind == .object {
+            let keys = node.objectKeys
+            if !keys.isEmpty {
+                let keySignature = keys.joined(separator: ",")
+                return triesByKeys[keySignature] != nil
+            }
+        }
+        
+        return false
     }
 }
