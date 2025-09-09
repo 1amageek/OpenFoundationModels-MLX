@@ -985,6 +985,98 @@ public struct LlamaModelCard: ModelCard {
 4. **Maintainability**: All logic in one place
 5. **Type Safety**: Direct use of Transcript and GenerationOptions
 
+## Tool Call Handling
+
+### Overview
+
+Tool calls are detected from LLM-generated text using `ToolCallDetector`, with ADAPT ensuring correct JSON structure when schema is provided.
+
+### ADAPT Integration for Tool Calls
+
+When tools are defined in the transcript, ADAPT constrains generation to produce valid tool call JSON:
+
+```swift
+// Schema for tool calls
+let toolCallSchema = SchemaMeta(
+    keys: ["tool_calls", "name", "arguments", "id"],
+    required: ["tool_calls", "name", "arguments"]
+)
+
+// ADAPT ensures generation follows this structure:
+{
+  "tool_calls": [
+    {
+      "name": "search",
+      "arguments": {"query": "Swift news"}
+    }
+  ]
+}
+```
+
+### Tool Execution Architecture
+
+Following Ollama's design, tool execution is separated from prompt generation:
+
+1. **ModelCard**: Defines tools in prompt, doesn't execute
+2. **MLXLanguageModel**: Detects tool calls in responses
+3. **Upper Layer** (future): Executes tools and manages conversation loop
+
+```swift
+// ModelCard includes tool definitions in prompt
+"# Tools\nnamespace functions {\n  type search = (_: {query: string}) => any;\n}"
+
+// MLXLanguageModel detects tool calls
+if let entry = ToolCallDetector.entryIfPresent(response) {
+    return entry  // Returns .toolCalls(ToolCalls)
+}
+
+// Execution happens at higher layer (not implemented yet)
+```
+
+## Architectural Decisions
+
+### Three-Layer Separation (New)
+
+The codebase now follows a clean three-layer architecture:
+
+1. **Execution Layer** (`MLXExecutor`)
+   - Pure MLXLLM model execution
+   - Model container management
+   - No business logic
+
+2. **ADAPT Layer** (`ADAPTEngine`)
+   - Schema-constrained generation
+   - TokenTrie caching
+   - JSON validation
+   - Independent of orchestration
+
+3. **Orchestration Layer** (`GenerationOrchestrator`)
+   - Retry logic
+   - Parameter conversion
+   - High-level coordination
+
+### ModelCard Simplification
+
+- **No Context abstraction**: Direct `prompt(transcript:options:)` interface
+- **No PromptRenderer**: All prompt logic in ModelCard
+- **Direct processing**: Extract data where needed, no intermediate layers
+
+### GenerationOptions Limitations
+
+Current limitations due to OpenFoundationModels API:
+
+- No metadata support for custom features (e.g., thinking mode)
+- No model-specific options
+- Workaround: Use hardcoded values or environment variables
+
+Future enhancement needed in OpenFoundationModels:
+```swift
+// Ideal future API
+public struct GenerationOptions {
+    public var metadata: [String: Any]?  // For custom features
+}
+```
+
 ## Implementation Status
 
 ### ✅ Complete
@@ -992,13 +1084,17 @@ public struct LlamaModelCard: ModelCard {
 - Phase-Aware Navigator with full JSON support
 - Constraint Optimizer with GPU operations
 - Recovery Manager with AbortableGenerator
-- Three-tier state management
+- Three-layer architecture separation
 - Dynamic token discovery
 - Schema validation with Snap correction
-- ModelCard template system design
+- ModelCard template system with PromptBuilder
+- Tool call detection with ADAPT integration
+- Simplified ModelCard without Context abstraction
 
 ### 🚧 Known Limitations
 - Nested object constraints (top-level only)
 - Array element validation (basic support)
 - Single schema per generation
 - Sequential processing only
+- GenerationOptions lacks metadata support
+- Tool execution layer not implemented (design only)
