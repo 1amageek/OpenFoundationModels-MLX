@@ -3,17 +3,42 @@ import OpenFoundationModels
 import OpenFoundationModelsExtra
 import MLXLMCommon
 
-// MLXLanguageModel is the provider adapter that conforms to the
-// OpenFoundationModels LanguageModel protocol, delegating core work to the
-// internal MLXChatEngine. The public API surface remains 100% compatible.
+/// MLXLanguageModel is the provider adapter that conforms to the
+/// OpenFoundationModels LanguageModel protocol, delegating core work to the
+/// internal MLXChatEngine. This class focuses exclusively on inference with
+/// pre-loaded models and does NOT handle model loading.
 public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     private let card: any ModelCard
     private let engine: MLXChatEngine
+    private let modelID: String
 
-    /// Initialize with a ModelCard. The card fully defines prompt rendering and default parameters.
-    public init(card: any ModelCard) async throws {
+    /// Initialize with a pre-loaded ModelContainer and ModelCard.
+    /// The model must be loaded separately using ModelLoader.
+    /// - Parameters:
+    ///   - modelContainer: Pre-loaded model from ModelLoader
+    ///   - card: ModelCard that defines prompt rendering and parameters
+    ///   - modelID: Identifier for the model (for reference)
+    public init(modelContainer: ModelContainer, card: any ModelCard, modelID: String) async throws {
         self.card = card
-        self.engine = try await MLXChatEngine(modelID: card.id)
+        self.modelID = modelID
+        
+        // Create backend with the pre-loaded model
+        let backend = MLXBackend()
+        await backend.setModel(modelContainer, modelID: modelID)
+        
+        // Initialize engine with the backend
+        self.engine = MLXChatEngine(backend: backend)
+    }
+    
+    /// Convenience initializer when you have a pre-configured backend
+    /// - Parameters:
+    ///   - backend: Pre-configured MLXBackend with model already set
+    ///   - card: ModelCard that defines prompt rendering and parameters
+    ///   - modelID: Identifier for the model
+    public init(backend: MLXBackend, card: any ModelCard, modelID: String) {
+        self.card = card
+        self.modelID = modelID
+        self.engine = MLXChatEngine(backend: backend)
     }
 
     public var isAvailable: Bool { true }
@@ -35,7 +60,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         } catch let error as CancellationError {
             // Rethrow cancellation errors without wrapping
             throw error
-        } catch let error as MLXBackendError {
+        } catch let error as MLXBackend.MLXBackendError {
             // Map backend errors with more detail
             throw GenerationError.decodingFailure(.init(debugDescription: "Backend error: \(error.localizedDescription)"))
         } catch {

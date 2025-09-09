@@ -1,60 +1,58 @@
 import Testing
 @testable import OpenFoundationModelsMLX
 import MLX
+import MLXLMCommon
 
 struct MemoryManagementTests {
     
-    // MARK: - Test Memory Management in MLXBackend
+    // MARK: - Test Memory Management
     
-    @Test("Model unloading")
-    func modelUnloading() async throws {
-        // Skip test if model loading fails (expected in test environment)
-        guard let backend = try? await MLXBackend(modelID: "test-model") else {
-            // Model loading not available in test environment
-            return
-        }
+    @Test("ModelLoader caching")
+    func modelLoaderCaching() async throws {
+        let loader = ModelLoader()
         
-        // Verify model is initially loaded (from constructor)
+        // Initially, cache should be empty
+        #expect(loader.cachedModels().isEmpty)
+        
+        // After loading a model (this will fail in tests, but we can test the API)
+        // loader.loadModel("test-model")
+        
+        // Test cache operations
+        loader.clearCache()
+        #expect(loader.cachedModels().isEmpty)
+        
+        // Test specific model cache check
+        #expect(loader.isCached("test-model") == false)
+    }
+    
+    @Test("MLXBackend model management")
+    func backendModelManagement() async throws {
+        let backend = MLXBackend()
+        
+        // Initially, no model should be set
         let currentModel = await backend.currentModel()
-        #expect(currentModel == "test-model")
+        #expect(currentModel == nil)
+        #expect(await backend.hasModel() == false)
         
-        // Unload the model
-        await backend.unloadModel()
+        // Clear model (should not crash even when no model is set)
+        await backend.clearModel()
         
-        // Verify model is unloaded
-        let afterUnload = await backend.currentModel()
-        #expect(afterUnload == nil)
+        // Verify still no model
+        #expect(await backend.currentModel() == nil)
     }
     
-    @Test("Clear all models")
-    func clearAllModels() async throws {
-        // Skip test if model loading fails (expected in test environment)
-        guard let backend = try? await MLXBackend(modelID: "test-model") else {
-            // Model loading not available in test environment
-            return
-        }
+    @Test("Progress reporting")
+    func progressReporting() async throws {
+        let loader = ModelLoader()
+        let progress = Foundation.Progress(totalUnitCount: 100)
         
-        // Clear all models
-        await backend.clearAllModels()
+        // Test that progress is properly initialized
+        #expect(progress.completedUnitCount == 0)
+        #expect(progress.fractionCompleted == 0.0)
         
-        // Verify no models are loaded
-        let models = await backend.cachedModels()
-        #expect(models.isEmpty)
-    }
-    
-    @Test("Memory pressure handling")
-    func memoryPressureHandling() async throws {
-        // Skip test if model loading fails (expected in test environment)
-        guard let backend = try? await MLXBackend(modelID: "test-model") else {
-            // Model loading not available in test environment
-            return
-        }
-        
-        // Trigger memory pressure handling
-        await backend.handleMemoryPressure()
-        
-        // This should not crash and should handle gracefully
-        // In a real test, you'd verify cache limits are adjusted
+        // In a real scenario, loading a model would update progress
+        // For testing, we just verify the API exists
+        // let container = try await loader.loadModel("test-model", progress: progress)
     }
     
     // MARK: - Test Thread Safety
@@ -219,7 +217,7 @@ struct MemoryManagementTests {
         
         // Add some data
         await metrics.recordGeneration(tokens: 1000, duration: 10.0, success: true)
-        await metrics.recordError(MLXBackendError.noModelLoaded)
+        await metrics.recordError(MLXBackend.MLXBackendError.noModelSet)
         await metrics.recordMemoryUsage(1024 * 1024 * 512) // 512 MB
         
         // Generate report
@@ -276,41 +274,34 @@ struct MemoryManagementTests {
     
     @Test("Memory pressure under load")
     func memoryPressureUnderLoad() async throws {
-        // Skip test if model loading fails (expected in test environment)
-        guard let backend = try? await MLXBackend(modelID: "test-model") else {
-            // Model loading not available in test environment
-            return
-        }
+        let backend = MLXBackend()
         
         // Simulate high memory usage scenario
         for i in 0..<10 {
+            // In real scenario, would check memory and clear models
             if i % 3 == 0 {
-                await backend.handleMemoryPressure()
+                await backend.clearModel()
             }
-            // In real scenario, would load/unload models
-            await backend.clearAllModels()
         }
         
         // Should handle without crashes
     }
     
-    @Test("Custom memory limits")
-    func customMemoryLimits() async throws {
-        // Test with different memory configurations
-        // Skip test if model loading fails (expected in test environment)
-        // Using bytes directly
-        guard let backend1 = try? await MLXBackend(modelID: "test-model", maxCacheMemory: 1_073_741_824) else { return }  // 1GB in bytes
+    @Test("ModelLoader memory configuration")
+    func modelLoaderMemoryConfiguration() async throws {
+        let loader = ModelLoader()
         
-        // Using MB helper
-        guard let backend2 = try? await MLXBackend(modelID: "test-model", maxCacheMemory: MLXBackend.MemorySize.MB(512)) else { return }  // 512MB
+        // Test memory configuration methods
+        loader.configureMemoryLimit(1_073_741_824) // 1GB
         
-        // Using GB helper
-        guard let backend3 = try? await MLXBackend(modelID: "test-model", maxCacheMemory: MLXBackend.MemorySize.GB(4)) else { return }  // 4GB
+        // Test memory usage estimation
+        let estimatedUsage = loader.estimatedMemoryUsage()
+        #expect(estimatedUsage >= 0)
         
-        // Verify backends are created successfully
-        // Actors are never nil after creation, just verify they exist
-        _ = backend1
-        _ = backend2
-        _ = backend3
+        // Test cache clearing
+        loader.clearCache()
+        loader.clearCache(for: "specific-model")
+        
+        // Should handle all operations without crashes
     }
 }

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OpenFoundationModels-MLX is a production-ready MLX adapter for OpenFoundationModels that implements **ADAPT (Adaptive Dynamic Assertion Protocol for Transformers)** - an advanced evolution beyond traditional Schema-Constrained Decoding. ADAPT provides GPU-accelerated local inference on Apple Silicon with guaranteed JSON schema compliance through adaptive token-level assertion.
 
+**Core Design Principle**: Strict separation of concerns between model management and inference. The `MLXLanguageModel` focuses exclusively on inference with pre-loaded models, while `ModelLoader` handles all downloading and loading operations with progress reporting capabilities.
+
 **Requirements**: Swift 6.2+ (Xcode 16.x or later), macOS 15.0+ (Sequoia), Apple Silicon Mac (M1/M2/M3)
 
 ## ADAPT: Adaptive Dynamic Assertion Protocol for Transformers
@@ -91,6 +93,140 @@ graph TB
     style TT fill:#ffe0b2
     style JSM fill:#e1f5fe
     style MLXOps fill:#e8f5e9
+```
+
+## Architecture: Layered Separation of Concerns
+
+### Core Design Principle
+
+The architecture follows strict layering with clear separation of responsibilities:
+
+```mermaid
+graph TB
+    subgraph "Public API"
+        ML[ModelLoader<br/>Model Loading & Caching]
+        LM[MLXLanguageModel<br/>OFM Protocol Adapter]
+    end
+    
+    subgraph "Internal Layers"
+        subgraph "Facade"
+            MB[MLXBackend<br/>Legacy Compatibility]
+        end
+        
+        subgraph "Orchestration"
+            GO[GenerationOrchestrator<br/>Retry & Validation]
+        end
+        
+        subgraph "ADAPT System"
+            AE[ADAPTEngine<br/>Schema Constraints]
+        end
+        
+        subgraph "Execution"
+            EX[MLXExecutor<br/>Pure Model Execution]
+        end
+    end
+    
+    ML --> |ModelContainer| LM
+    LM --> MB
+    MB --> GO
+    MB --> AE
+    MB --> EX
+    GO --> AE
+    GO --> EX
+    AE --> EX
+    
+    style ML fill:#e8f5e9
+    style LM fill:#e1f5fe
+    style AE fill:#f3e5f5
+    style EX fill:#fff3e0
+```
+
+### Layer Responsibilities
+
+1. **MLXExecutor** (`Internal/Execution/`) - Pure model execution
+   - Direct interface with MLXLLM
+   - No business logic or validation
+   - Handles ModelContainer management
+   - Provides execute() and executeStream() methods
+
+2. **ADAPTEngine** (`Internal/ADAPT/`) - Schema-constrained generation
+   - TokenTrie construction and caching
+   - LogitProcessor creation and management
+   - JSON validation and correction
+   - Completely independent of orchestration logic
+
+3. **GenerationOrchestrator** (`Internal/Orchestration/`) - High-level coordination
+   - Retry logic with configurable attempts
+   - Parameter conversion between formats
+   - Buffer management for streaming
+   - Response format handling
+   - Delegates to MLXExecutor and ADAPTEngine
+
+4. **MLXBackend** (`Internal/Engine/`) - Legacy compatibility facade
+   - Maintains backward compatibility
+   - Simple delegation to new architecture
+   - Will be deprecated in future versions
+
+5. **MLXLanguageModel** (`Adapter/`) - OFM protocol implementation
+   - Uses pre-loaded ModelContainer for inference
+   - Implements generate() and stream() methods
+   - **NEVER** downloads or loads models
+   - **NEVER** depends on ModelLoader
+
+6. **ModelLoader** (`Public/`) - Model lifecycle management
+   - Downloads models from HuggingFace Hub
+   - Loads models into memory
+   - Manages model cache
+   - Reports progress via Foundation.Progress
+   - **NEVER** involved in inference
+   - Delegates to MLXBackend for generation
+   - **NEVER** touches model management
+
+## Model Loading Architecture
+
+### ModelLoader Specification
+
+```swift
+public final class ModelLoader {
+    private let hubApi: HubApi
+    private var cache: [String: ModelContainer] = [:]
+    
+    /// Load model with progress reporting
+    /// - Parameters:
+    ///   - modelID: HuggingFace model ID (e.g., "mlx-community/llama-3-8b")
+    ///   - progress: External Progress object for UI monitoring
+    /// - Returns: Loaded ModelContainer ready for inference
+    public func loadModel(_ modelID: String, progress: Progress? = nil) async throws -> ModelContainer
+    
+    /// Download model without loading into memory
+    public func downloadModel(_ modelID: String, progress: Progress? = nil) async throws
+    
+    /// Load model from local path
+    public func loadLocalModel(from path: URL) async throws -> ModelContainer
+    
+    /// List cached models
+    public func cachedModels() -> [String]
+    
+    /// Clear model cache
+    public func clearCache()
+}
+```
+
+### Progress Reporting
+
+The ModelLoader accepts a Foundation.Progress object to enable UI monitoring:
+
+```swift
+let progress = Progress(totalUnitCount: 100)
+
+// Monitor progress in UI
+progress.publisher(for: \.fractionCompleted)
+    .sink { fraction in
+        updateProgressBar(fraction)
+    }
+
+// Load model with progress
+let container = try await loader.loadModel("model-id", progress: progress)
 ```
 
 ## ADAPT Implementation Specification
@@ -264,9 +400,54 @@ public final class AbortableGenerator {
 }
 ```
 
-## ADAPT Integration Flow
+## Implementation Flow
 
-### Token Processing Pipeline
+### Complete System Flow
+
+```mermaid
+graph TB
+    subgraph "Preparation Phase (Model Loading)"
+        App[Application]
+        ML[ModelLoader]
+        Progress[Foundation.Progress]
+        MC[ModelContainer]
+    end
+    
+    subgraph "Initialization Phase"
+        LM[MLXLanguageModel]
+        Backend[MLXBackend]
+        Engine[MLXChatEngine]
+    end
+    
+    subgraph "Inference Phase"
+        Transcript[Transcript]
+        ADAPT[ADAPT System]
+        Response[Generated Response]
+    end
+    
+    App -->|loadModel(modelID, progress)| ML
+    ML -->|reports progress| Progress
+    App -->|monitors| Progress
+    ML -->|returns| MC
+    
+    App -->|init(modelContainer)| LM
+    LM -->|setModel(container)| Backend
+    LM -->|creates| Engine
+    
+    App -->|generate(transcript)| LM
+    LM -->|delegates to| Engine
+    Engine -->|uses| Backend
+    Backend -->|applies| ADAPT
+    Backend -->|produces| Response
+    Response -->|returned to| App
+    
+    style ML fill:#e8f5e9
+    style LM fill:#e1f5fe
+    style ADAPT fill:#f3e5f5
+    style Progress fill:#fff3e0
+```
+
+### ADAPT Token Processing Pipeline
 
 ```mermaid
 sequenceDiagram
@@ -372,6 +553,22 @@ xed .
 
 ## Key Implementation Files
 
+### Model Management Layer
+- `Public/ModelLoader.swift`: Model downloading and loading with Progress support
+  - **Independent** from inference layer
+  - Returns ModelContainer for use by MLXLanguageModel
+
+### Inference Layer
+- `Adapter/MLXLanguageModel.swift`: LanguageModel protocol implementation
+  - **Requires** pre-loaded ModelContainer
+  - **Never** performs model loading
+- `Internal/Engine/MLXBackend.swift`: Generation engine
+  - **Receives** ModelContainer via setModel()
+  - **Never** downloads or manages models
+- `Internal/Engine/MLXChatEngine.swift`: Chat orchestration
+  - Transforms Transcript to prompts
+  - **Never** touches model management
+
 ### ADAPT Core Implementation
 - `Internal/Processor/TokenTrieLogitProcessor.swift`: Main ADAPT processor implementing LogitProcessor protocol
 - `Internal/Core/CoreTypes.swift`: TokenTrie data structure and Path implementation
@@ -383,10 +580,6 @@ xed .
 - `Internal/Decode/JSONKeyTracker.swift`: Schema violation tracking
 - `Internal/Decode/SchemaSnapParser.swift`: Distance-1 key correction
 - `Internal/Utils/MLXUtils.swift`: GPU operation utilities
-
-### Integration Points
-- `Internal/Engine/MLXBackend.swift`: ModelContainer integration with ADAPT
-- `Internal/Engine/MLXChatEngine.swift`: High-level orchestration
 - `Internal/Tokenization/MLXLLMTokenizer.swift`: TokenizerAdapter implementation
 
 ## Testing Requirements
@@ -424,6 +617,165 @@ Each ADAPT subsystem must have comprehensive tests:
 - Edge cases (empty schema, single key, many keys)
 - Token vocabulary variations
 
+## Implementation Requirements
+
+### ModelLoader Requirements
+- **MUST** accept external Foundation.Progress object for UI monitoring
+- **MUST** support model caching to avoid redundant downloads
+- **MUST** be completely independent of MLXLanguageModel
+- **MUST** return ModelContainer for use by inference layer
+- **MUST NOT** perform any inference operations
+- **MUST NOT** depend on any inference components
+
+### MLXLanguageModel Requirements
+- **MUST** accept pre-loaded ModelContainer in initialization
+- **MUST NOT** contain any model loading or downloading logic
+- **MUST NOT** depend on ModelLoader
+- **MUST NOT** manage model lifecycle
+- **MUST** focus exclusively on inference operations
+- **MUST** implement LanguageModel protocol completely
+
+### MLXBackend Requirements
+- **MUST** receive ModelContainer via setModel() method
+- **MUST NOT** download or load models
+- **MUST NOT** manage model cache
+- **MUST NOT** handle model lifecycle
+- **MUST** focus exclusively on generation with ADAPT
+
+### Integration Requirements
+- Application layer **MUST** coordinate between ModelLoader and MLXLanguageModel
+- Progress monitoring **MUST** be handled at application layer
+- Model lifecycle **MUST** be managed by application, not by inference components
+
+## Usage Examples
+
+### Correct Usage Pattern
+
+```swift
+import Foundation
+import OpenFoundationModelsMLX
+
+class ChatApplication {
+    private let modelLoader = ModelLoader()
+    private var languageModel: MLXLanguageModel?
+    private let progress = Progress(totalUnitCount: 100)
+    
+    func setupModel() async throws {
+        // Step 1: Load model with progress monitoring
+        progress.localizedDescription = "Loading model..."
+        
+        let container = try await modelLoader.loadModel(
+            "mlx-community/llama-3-8b",
+            progress: progress
+        )
+        
+        // Step 2: Create LanguageModel for inference only
+        languageModel = await MLXLanguageModel(
+            modelContainer: container,
+            modelID: "mlx-community/llama-3-8b"
+        )
+    }
+    
+    func generateResponse(for transcript: Transcript) async throws -> Transcript.Entry {
+        guard let model = languageModel else {
+            throw AppError.modelNotLoaded
+        }
+        
+        // Use model for inference
+        return try await model.generate(
+            transcript: transcript,
+            options: LanguageModelOptions(schema: MySchema.self)
+        )
+    }
+}
+```
+
+### Progress Monitoring Example
+
+```swift
+// UIKit
+class LoadingViewController: UIViewController {
+    @IBOutlet weak var progressView: UIProgressView!
+    private let progress = Progress(totalUnitCount: 100)
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        // Observe progress changes
+        progress.publisher(for: \.fractionCompleted)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] fraction in
+                self?.progressView.progress = Float(fraction)
+            }
+            .store(in: &cancellables)
+        
+        Task {
+            let loader = ModelLoader()
+            let container = try await loader.loadModel("model-id", progress: progress)
+            // Model loaded, create LanguageModel...
+        }
+    }
+}
+
+// SwiftUI (with Observation)
+@Observable
+class ModelManager {
+    let progress = Progress(totalUnitCount: 100)
+    private(set) var isLoading = false
+    private(set) var model: MLXLanguageModel?
+    
+    func loadModel(_ modelID: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        
+        let loader = ModelLoader()
+        let container = try await loader.loadModel(modelID, progress: progress)
+        model = await MLXLanguageModel(modelContainer: container, modelID: modelID)
+    }
+}
+
+struct ContentView: View {
+    @State private var manager = ModelManager()
+    
+    var body: some View {
+        VStack {
+            if manager.isLoading {
+                ProgressView(value: manager.progress.fractionCompleted)
+                Text(manager.progress.localizedDescription ?? "Loading...")
+            }
+        }
+        .task {
+            try? await manager.loadModel("mlx-community/llama-3-8b")
+        }
+    }
+}
+```
+
+### Incorrect Patterns (DO NOT USE)
+
+```swift
+// ❌ WRONG: MLXLanguageModel should not load models
+class MLXLanguageModel {
+    init(modelID: String) async throws {
+        let loader = ModelLoader()  // ❌ Should not depend on ModelLoader
+        let container = try await loader.loadModel(modelID)  // ❌ Should not load
+    }
+}
+
+// ❌ WRONG: MLXBackend should not manage models
+actor MLXBackend {
+    func loadModel(_ modelID: String) async throws {  // ❌ Should not exist
+        // Model loading logic here
+    }
+}
+
+// ❌ WRONG: Mixing responsibilities
+class MLXLanguageModel {
+    private let modelLoader = ModelLoader()  // ❌ Should not have loader
+    func downloadModel() async throws { }    // ❌ Should not download
+}
+```
+
 ## Dependencies
 
 - `OpenFoundationModels`: Core LanguageModel protocol
@@ -431,6 +783,7 @@ Each ADAPT subsystem must have comprehensive tests:
 - `MLXLLM`: LogitProcessor protocol and ModelContainer
 - `MLXLMCommon`: Generation utilities
 - `swift-transformers`: HuggingFace tokenizer (v0.1.23+)
+- `Hub`: HuggingFace Hub API for model downloads
 
 ## Implementation Status
 

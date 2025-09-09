@@ -3,31 +3,43 @@ import Foundation
 // Core engine actor that orchestrates text generation through MLXBackend.
 // Now operates as a simple low-level executor - no prompt rendering, no retries.
 actor MLXChatEngine {
-    let modelID: String
     private let backend: MLXBackend
     private let maxBufferSizeKB: Int  // Simple buffer size configuration
 
-    init(modelID: String, maxBufferSizeKB: Int = 2048) async throws {
-        self.modelID = modelID
+    /// Initialize with a pre-configured backend
+    /// - Parameters:
+    ///   - backend: MLXBackend with model already set
+    ///   - maxBufferSizeKB: Maximum buffer size for streaming (default 2048KB)
+    init(backend: MLXBackend, maxBufferSizeKB: Int = 2048) {
+        self.backend = backend
         self.maxBufferSizeKB = maxBufferSizeKB
-        self.backend = try await MLXBackend(modelID: modelID)
     }
 
     func generate(_ req: ChatRequest) async throws -> ChatResponse {
         // Single execution - no retries, no temperature adjustment
         let prompt = req.prompt  // Use the pre-rendered prompt directly
         
+        // Use SamplingParameters, converting from GenerateParameters if needed
+        let sampling: SamplingParameters
+        if let p = req.parameters {
+            // Convert GenerateParameters to SamplingParameters
+            sampling = SamplingParameters(
+                temperature: Double(p.temperature),
+                topP: Double(p.topP),
+                topK: nil,  // GenerateParameters doesn't have topK
+                maxTokens: p.maxTokens,
+                stop: nil,
+                seed: nil   // GenerateParameters doesn't have seed
+            )
+        } else {
+            sampling = req.sampling
+        }
+        
         let text: String
         if let schema = req.schema {
-            if let p = req.parameters {
-                text = try await backend.generateTextConstrained(prompt: prompt, parameters: p, schema: schema)
-            } else {
-                text = try await backend.generateTextConstrained(prompt: prompt, sampling: req.sampling, schema: schema)
-            }
-        } else if let p = req.parameters {
-            text = try await backend.generateText(prompt: prompt, parameters: p)
+            text = try await backend.generateTextConstrained(prompt: prompt, sampling: sampling, schema: schema)
         } else {
-            text = try await backend.generateText(prompt: prompt, sampling: req.sampling)
+            text = try await backend.generateText(prompt: prompt, sampling: sampling)
         }
         
         // Single validation - throw immediately on failure
@@ -70,16 +82,25 @@ actor MLXChatEngine {
                 
                 // Create a cancellable task for stream generation
                 let streamTask = Task { () -> AsyncThrowingStream<String, Error> in
-                    if let schema = req.schema {
-                        if let p = req.parameters {
-                            return await backend.streamTextConstrained(prompt: prompt, parameters: p, schema: schema)
-                        } else {
-                            return await backend.streamTextConstrained(prompt: prompt, sampling: req.sampling, schema: schema)
-                        }
-                    } else if let p = req.parameters {
-                        return await backend.streamText(prompt: prompt, parameters: p)
+                    // Convert GenerateParameters to SamplingParameters if needed
+                    let sampling: SamplingParameters
+                    if let p = req.parameters {
+                        sampling = SamplingParameters(
+                            temperature: Double(p.temperature),
+                            topP: Double(p.topP),
+                            topK: nil,  // GenerateParameters doesn't have topK
+                            maxTokens: p.maxTokens,
+                            stop: nil,
+                            seed: nil   // GenerateParameters doesn't have seed
+                        )
                     } else {
-                        return await backend.streamText(prompt: prompt, sampling: req.sampling)
+                        sampling = req.sampling
+                    }
+                    
+                    if let schema = req.schema {
+                        return await backend.streamTextConstrained(prompt: prompt, sampling: sampling, schema: schema)
+                    } else {
+                        return await backend.streamText(prompt: prompt, sampling: sampling)
                     }
                 }
                 
