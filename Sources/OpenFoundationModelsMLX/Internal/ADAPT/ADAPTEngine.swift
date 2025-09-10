@@ -213,32 +213,6 @@ public actor ADAPTEngine {
         )
     }
     
-    // MARK: - Private Methods
-    
-    private func getOrCreateTrie(schema: SchemaMeta, tokenizer: Tokenizer) -> TokenTrie {
-        // Create a cache key from schema keys
-        let cacheKey = schema.keys.sorted().joined(separator: "|")
-        
-        if let cached = trieCache[cacheKey] {
-            return cached
-        }
-        
-        // Create new trie (wrap tokenizer in adapter)
-        let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
-        let trie = TokenTrieBuilder.buildCached(schema: schema, tokenizer: adapter)
-        
-        // Cache management
-        if trieCache.count >= maxCacheSize {
-            // Remove oldest entry (simple FIFO for now)
-            if let firstKey = trieCache.keys.first {
-                trieCache.removeValue(forKey: firstKey)
-            }
-        }
-        
-        trieCache[cacheKey] = trie
-        return trie
-    }
-    
     // MARK: - Cache Management
     
     /// Clear the TokenTrie cache

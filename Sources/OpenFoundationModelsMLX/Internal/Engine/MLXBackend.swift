@@ -79,24 +79,7 @@ public actor MLXBackend {
         )
     }
     
-    func generateTextConstrained(
-        prompt: String,
-        sampling: SamplingParameters,
-        schema: SchemaNode
-    ) async throws -> String {
-        guard await hasModel() else {
-            throw MLXBackendError.noModelSet
-        }
-        
-        return try await adaptEngine.generateWithSchema(
-            executor: executor,
-            prompt: prompt,
-            schema: schema,
-            parameters: sampling
-        )
-    }
-    
-    // New method with SchemaNode support
+    // Generate text with schema constraints
     func generateTextWithSchema(
         prompt: String,
         sampling: SamplingParameters,
@@ -151,38 +134,7 @@ public actor MLXBackend {
         }
     }
     
-    func streamTextConstrained(
-        prompt: String,
-        sampling: SamplingParameters,
-        schema: SchemaNode
-    ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                guard await hasModel() else {
-                    continuation.finish(throwing: MLXBackendError.noModelSet)
-                    return
-                }
-                
-                let stream = await adaptEngine.streamWithSchema(
-                    executor: executor,
-                    prompt: prompt,
-                    schema: schema,
-                    parameters: sampling
-                )
-                
-                do {
-                    for try await chunk in stream {
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-        }
-    }
-    
-    // New method with SchemaNode support  
+    // Stream text generation with schema constraints
     func streamTextWithSchema(
         prompt: String,
         sampling: SamplingParameters,
@@ -212,32 +164,5 @@ public actor MLXBackend {
                 }
             }
         }
-    }
-    
-    // MARK: - JSON Generation Convenience (Legacy Interface)
-    
-    func generateJSON<T: Decodable>(
-        prompt: String,
-        schema: T.Type,
-        sampling: SamplingParameters = SamplingParameters()
-    ) async throws -> T {
-        // For now, we need to manually specify the schema keys
-        // In a real implementation, this would be extracted from the Decodable type
-        let schemaNode = SchemaNode(kind: .object, properties: [:], required: [])
-        
-        // Generate constrained text
-        let jsonText = try await generateTextConstrained(
-            prompt: prompt,
-            sampling: sampling,
-            schema: schemaNode
-        )
-        
-        // Parse JSON
-        guard let data = jsonText.data(using: .utf8) else {
-            throw MLXBackendError.generationFailed("Invalid UTF-8 in generated JSON")
-        }
-        
-        let decoder = JSONDecoder()
-        return try decoder.decode(T.self, from: data)
     }
 }

@@ -151,23 +151,3 @@ public final class ModelLoader {
         }
     }
 }
-
-// MARK: - Memory Management
-
-extension ModelLoader {
-    
-    /// Configure memory limits for model caching
-    /// - Parameter maxMemoryBytes: Maximum memory to use for cached models
-    public func configureMemoryLimit(_ maxMemoryBytes: Int) {
-        // This would integrate with MLX memory management
-        // For now, this is a placeholder for future implementation
-    }
-    
-    /// Get estimated memory usage of cached models
-    /// - Returns: Estimated memory usage in bytes
-    public func estimatedMemoryUsage() -> Int {
-        // Placeholder for memory estimation
-        // Would need to query MLX for actual memory usage
-        return modelCache.count * 1_000_000_000 // Rough estimate of 1GB per model
-    }
-}

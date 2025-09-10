@@ -113,20 +113,4 @@ public struct JSONValidator {
             return true
         }
     }
-    
-    /// Legacy validation for SchemaMeta (backward compatibility)
-    public init(allowExtraKeys: Bool = false, enableSnap: Bool = false) {
-        // Legacy init for compatibility
-    }
-    
-    /// Legacy validate method for SchemaMeta
-    public func validate(text: String, schema: SchemaMeta) -> Bool {
-        // Convert SchemaMeta to simple SchemaNode
-        let node = SchemaNode(
-            kind: .object,
-            properties: Dictionary(uniqueKeysWithValues: schema.keys.map { ($0, SchemaNode.any) }),
-            required: Set(schema.required)
-        )
-        return JSONValidator.validate(text: text, schema: node)
-    }
 }

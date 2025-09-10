@@ -99,7 +99,7 @@ actor MLXChatEngine {
                     }
                     
                     if let schema = req.schema {
-                        return await backend.streamTextConstrained(prompt: prompt, sampling: sampling, schema: schema)
+                        return await backend.streamTextWithSchema(prompt: prompt, sampling: sampling, schema: schema)
                     } else {
                         return await backend.streamText(prompt: prompt, sampling: sampling)
                     }
