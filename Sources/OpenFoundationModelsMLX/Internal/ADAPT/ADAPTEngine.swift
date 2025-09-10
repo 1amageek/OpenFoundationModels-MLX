@@ -2,12 +2,17 @@ import Foundation
 import MLX
 import MLXLMCommon
 import MLXLLM
-import Tokenizers
+@preconcurrency import Tokenizers
 
 public actor ADAPTEngine {
     
-    private var trieCache: [String: TokenTrie] = [:]
-    private let maxCacheSize = 100
+    private var schemaIndexCache: LRUCache<String, SchemaTrieIndex>  // SchemaTrieIndex用LRUキャッシュ
+    private let maxCacheSize: Int
+    
+    public init(maxCacheSize: Int = 100) {
+        self.maxCacheSize = maxCacheSize
+        self.schemaIndexCache = LRUCache<String, SchemaTrieIndex>(maxSize: maxCacheSize)
+    }
     
     public enum ADAPTError: LocalizedError {
         case noTokenizer
@@ -38,12 +43,33 @@ public actor ADAPTEngine {
     ) async throws -> String {
         Logger.debug("[ADAPT] Schema received with \(schema.objectKeys.count) keys: \(schema.objectKeys)")
         
+        // キャッシュキーを事前に生成（tokenizerに依存しない部分）
+        let schemaKey = schema.objectKeys.sorted().joined()
+        
         // Get tokenizer safely without nesting perform
+        let (adapter, fingerprint) = try await executor.withTokenizer { tokenizer in
+            let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
+            return (adapter, adapter.fingerprint())
+        }
+        
+        // キャッシュアクセスはクロージャの外で行う
+        let cacheKey = "\(fingerprint)|\(schemaKey)"
+        let schemaIndex: SchemaTrieIndex
+        if let cached = schemaIndexCache.get(cacheKey) {
+            Logger.debug("[ADAPT] Using cached SchemaTrieIndex for key: \(cacheKey)")
+            schemaIndex = cached
+        } else {
+            Logger.debug("[ADAPT] Building new SchemaTrieIndex for key: \(cacheKey)")
+            schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
+            schemaIndexCache.set(cacheKey, value: schemaIndex)
+        }
+        
+        // ProcessorはSchemaIndexを使って作成
         let constraintProcessor = try await executor.withTokenizer { tokenizer in
-            Logger.debug("[ADAPT] Building TokenTrie for schema with kind: \(schema.kind)")
             let processor = TokenTrieLogitProcessor(
                 schema: schema,
-                tokenizer: tokenizer
+                tokenizer: tokenizer,
+                cachedIndex: schemaIndex  // キャッシュされたIndexを渡す
             )
             processor.clearError()
             Logger.debug("[ADAPT] TokenTrieLogitProcessor created successfully")
@@ -85,12 +111,33 @@ public actor ADAPTEngine {
         AsyncThrowingStream { continuation in
             Task {
                 do {
+                    // キャッシュキーを事前に生成（tokenizerに依存しない部分）
+                    let schemaKey = schema.objectKeys.sorted().joined()
+                    
                     // Get tokenizer safely without nesting perform
+                    let (adapter, fingerprint) = try await executor.withTokenizer { tokenizer in
+                        let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
+                        return (adapter, adapter.fingerprint())
+                    }
+                    
+                    // キャッシュアクセスはクロージャの外で行う
+                    let cacheKey = "\(fingerprint)|\(schemaKey)"
+                    let schemaIndex: SchemaTrieIndex
+                    if let cached = await self.schemaIndexCache.get(cacheKey) {
+                        Logger.debug("[ADAPT] [Stream] Using cached SchemaTrieIndex for key: \(cacheKey)")
+                        schemaIndex = cached
+                    } else {
+                        Logger.debug("[ADAPT] [Stream] Building new SchemaTrieIndex for key: \(cacheKey)")
+                        schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
+                        await self.schemaIndexCache.set(cacheKey, value: schemaIndex)
+                    }
+                    
+                    // ProcessorはSchemaIndexを使って作成
                     let constraintProcessor = try await executor.withTokenizer { tokenizer in
-                        Logger.debug("[ADAPT] [Stream] Building TokenTrie for schema with kind: \(schema.kind)")
                         let processor = TokenTrieLogitProcessor(
                             schema: schema,
-                            tokenizer: tokenizer
+                            tokenizer: tokenizer,
+                            cachedIndex: schemaIndex  // キャッシュされたIndexを渡す
                         )
                         processor.clearError()
                         Logger.debug("[ADAPT] [Stream] TokenTrieLogitProcessor created successfully")
@@ -111,49 +158,11 @@ public actor ADAPTEngine {
                         logitProcessor: constraintProcessor
                     )
                     
-                    // Buffer for validation
-                    var buffer = ""
-                    let jsonState = JSONStateMachine()
-                    
                     // Process stream with ADAPT constraints
+                    // Note: TokenTrieLogitProcessor already handles JSON state tracking and validation
                     for try await chunk in baseStream {
-                        buffer += chunk
-                        
-                        // Update JSON state
-                        for char in chunk {
-                            jsonState.processCharacter(char)
-                        }
-                        
-                        // Check for JSON completion
-                        if jsonState.isComplete() {
-                            Logger.debug("[ADAPT] [Stream] JSON completed, validating...")
-                            // Validate complete JSON with hierarchical schema
-                            if JSONValidator.validate(text: buffer, schema: schema) {
-                                Logger.debug("[ADAPT] [Stream] Validation success")
-                                continuation.yield(chunk)
-                                continuation.finish()
-                                return
-                            } else {
-                                Logger.debug("[ADAPT] [Stream] Validation failure for: \(buffer)")
-                                throw ADAPTError.validationFailed("Complete JSON does not match schema")
-                            }
-                        }
-                        
-                        // Check for errors before yielding
-                        if jsonState.isError() {
-                            throw ADAPTError.abortedGeneration("JSON parsing error detected")
-                        }
-                        
-                        // Yield chunk only if no error
+                        // Simply pass through - constraint processor ensures valid JSON
                         continuation.yield(chunk)
-                    }
-                    
-                    // Final validation with hierarchical schema
-                    let finalValid = JSONValidator.validate(text: buffer, schema: schema)
-                    Logger.debug("[ADAPT] [Stream] Final validation: \(finalValid ? "success" : "failure")")
-                    if !finalValid {
-                        Logger.debug("[ADAPT] [Stream] Final buffer: \(buffer)")
-                        throw ADAPTError.validationFailed("Final JSON does not match schema")
                     }
                     
                     continuation.finish()
@@ -177,17 +186,17 @@ public actor ADAPTEngine {
     
     
     public func clearCache() {
-        trieCache.removeAll()
+        schemaIndexCache.clear()
         Logger.info("[ADAPTEngine] Cache cleared")
     }
     
     public func cacheSize() -> Int {
-        return trieCache.count
+        return schemaIndexCache.count
     }
     
     public func getMetrics() -> ADAPTMetrics {
         return ADAPTMetrics(
-            cacheSize: trieCache.count,
+            cacheSize: schemaIndexCache.count,
             maxCacheSize: maxCacheSize
         )
     }

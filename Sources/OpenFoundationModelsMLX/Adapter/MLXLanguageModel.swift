@@ -44,37 +44,22 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
         
-        print("🎯 [MLXLanguageModel] Generated prompt to send to LLM:")
-        print("================== PROMPT START ==================")
-        print(prompt.description)
-        print("=================== PROMPT END ===================")
-        
         // Extract necessary data for ChatRequest
         let ext = TranscriptAccess.extract(from: transcript)
         
-        print("🔍 [MLXLanguageModel] Extracting schema information...")
-        print("📝 [MLXLanguageModel] Schema JSON: \(ext.schemaJSON ?? "nil")")
-        
         let responseFormat: ResponseFormatSpec = {
             if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
-                print("📋 [MLXLanguageModel] Using JSON schema response format")
                 return .jsonSchema(schemaJSON: schemaJSON) 
             }
-            print("📋 [MLXLanguageModel] Using text response format")
             return .text
         }()
         
         let schemaNode: SchemaNode? = {
             switch responseFormat {
             case .jsonSchema(let json):
-                print("🔍 [MLXLanguageModel] Parsing schema JSON to SchemaNode...")
                 if let node = SchemaBuilder.fromJSONString(json) {
-                    print("📋 [MLXLanguageModel] Schema root keys: \(node.objectKeys)")
-                    print("📋 [MLXLanguageModel] Required fields: \(node.required)")
-                    SchemaBuilder.debugPrint(node)
                     return node
                 }
-                print("⚠️ [MLXLanguageModel] Failed to parse schema JSON")
                 return nil
             default: 
                 return nil
@@ -82,25 +67,42 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         
-        let sampling = OptionsMapper.map(options)
-        let directParams: GenerateParameters? = (options == nil) ? card.params : nil
+        // パラメータを正しくマージ: card.paramsをベースに、optionsで上書き
+        let mergedSampling: SamplingParameters
+        let mergedParams: GenerateParameters?
+        
+        if options != nil {
+            // optionsが指定されている場合: OptionsMapperの結果を使用
+            mergedSampling = OptionsMapper.map(options)
+            mergedParams = nil  // samplingが優先される
+        } else {
+            // optionsがnilの場合: card.paramsをSamplingParametersに変換
+            let p = card.params
+            mergedSampling = SamplingParameters(
+                temperature: Double(p.temperature),
+                topP: Double(p.topP),
+                topK: nil,
+                maxTokens: p.maxTokens,
+                stop: nil,
+                seed: nil
+            )
+            mergedParams = nil  // samplingに統一
+        }
         
         let req = ChatRequest(
             modelID: card.id,
             prompt: prompt.description,
             responseFormat: responseFormat,
-            sampling: sampling,
+            sampling: mergedSampling,
             schema: schemaNode,
-            parameters: directParams
+            parameters: mergedParams
         )
         
         do {
-            print("🚀 [MLXLanguageModel] Sending request to engine...")
             let res = try await engine.generate(req)
             // Convert the assistant text into a Transcript.Entry.response in a
             // conservative way: return plain text response segment.
             if let text = res.choices.first?.content {
-                print("📝 [MLXLanguageModel] Generated text: \(text)")
                 if let entry = ToolCallDetector.entryIfPresent(text) {
                     return entry
                 }
@@ -133,14 +135,9 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         let schemaNode: SchemaNode? = {
             switch responseFormat {
             case .jsonSchema(let json):
-                print("🔍 [MLXLanguageModel] Parsing schema JSON to SchemaNode...")
                 if let node = SchemaBuilder.fromJSONString(json) {
-                    print("📋 [MLXLanguageModel] Schema root keys: \(node.objectKeys)")
-                    print("📋 [MLXLanguageModel] Required fields: \(node.required)")
-                    SchemaBuilder.debugPrint(node)
                     return node
                 }
-                print("⚠️ [MLXLanguageModel] Failed to parse schema JSON")
                 return nil
             default: 
                 return nil
@@ -148,16 +145,35 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         
-        let sampling = OptionsMapper.map(options)
-        let directParams: GenerateParameters? = (options == nil) ? card.params : nil
+        // パラメータを正しくマージ: card.paramsをベースに、optionsで上書き
+        let mergedSampling: SamplingParameters
+        let mergedParams: GenerateParameters?
+        
+        if options != nil {
+            // optionsが指定されている場合: OptionsMapperの結果を使用
+            mergedSampling = OptionsMapper.map(options)
+            mergedParams = nil  // samplingが優先される
+        } else {
+            // optionsがnilの場合: card.paramsをSamplingParametersに変換
+            let p = card.params
+            mergedSampling = SamplingParameters(
+                temperature: Double(p.temperature),
+                topP: Double(p.topP),
+                topK: nil,
+                maxTokens: p.maxTokens,
+                stop: nil,
+                seed: nil
+            )
+            mergedParams = nil  // samplingに統一
+        }
         
         let req = ChatRequest(
             modelID: card.id,
             prompt: prompt.description,
             responseFormat: responseFormat,
-            sampling: sampling,
+            sampling: mergedSampling,
             schema: schemaNode,
-            parameters: directParams
+            parameters: mergedParams
         )
         return AsyncStream { continuation in
             let task = Task {

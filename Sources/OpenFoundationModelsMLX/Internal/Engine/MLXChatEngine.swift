@@ -26,21 +26,29 @@ actor MLXChatEngine {
             sampling = req.sampling
         }
         
-        let text: String
-        if let schemaNode = req.schema {
-            text = try await backend.generateTextWithSchema(prompt: prompt, sampling: sampling, schema: schemaNode)
-        } else {
-            text = try await backend.generateText(prompt: prompt, sampling: sampling)
-        }
+        // schemaJSONを抽出
+        let schemaJSON: String? = {
+            if case .jsonSchema(let json) = req.responseFormat {
+                return json
+            }
+            return nil
+        }()
         
+        // GenerationOrchestrator経由で実行（リトライ、バリデーション機能あり）
+        let text = try await backend.orchestratedGenerate(
+            prompt: prompt,
+            sampling: sampling,
+            schema: req.schema,
+            schemaJSON: schemaJSON
+        )
+        
+        // Orchestratorがバリデーションも行うため、ここでの追加チェックは不要
+        // ただし互換性のため responseFormat のチェックは残す
         switch req.responseFormat {
         case .text: break
         case .jsonSchema:
-            if let schemaNode = req.schema {
-                if JSONValidator.validate(text: text, schema: schemaNode) == false { 
-                    throw ValidationError.schemaUnsatisfied 
-                }
-            }
+            // Orchestratorで既にバリデーション済み
+            break
         case .jsonSchemaRef: break
         }
 
@@ -72,13 +80,21 @@ actor MLXChatEngine {
                     sampling = req.sampling
                 }
                 
-                // Get stream from backend (ADAPT handles all schema constraints)
-                let textStream: AsyncThrowingStream<String, Error>
-                if let schema = req.schema {
-                    textStream = await backend.streamTextWithSchema(prompt: prompt, sampling: sampling, schema: schema)
-                } else {
-                    textStream = await backend.streamText(prompt: prompt, sampling: sampling)
-                }
+                // schemaJSONを抽出
+                let schemaJSON: String? = {
+                    if case .jsonSchema(let json) = req.responseFormat {
+                        return json
+                    }
+                    return nil
+                }()
+                
+                // GenerationOrchestrator経由でストリーミング（リトライ、ADAPT制約を含む）
+                let textStream = await backend.orchestratedStream(
+                    prompt: prompt,
+                    sampling: sampling,
+                    schema: req.schema,
+                    schemaJSON: schemaJSON
+                )
                 
                 // Simply pass through the stream
                 do {
@@ -97,9 +113,4 @@ actor MLXChatEngine {
             }
         }
     }
-}
-
-
-private enum ValidationError: Error { 
-    case schemaUnsatisfied
 }

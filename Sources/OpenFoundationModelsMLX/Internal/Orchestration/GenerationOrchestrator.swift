@@ -11,7 +11,6 @@ actor GenerationOrchestrator {
     private let executor: MLXExecutor
     private let adaptEngine: ADAPTEngine
     private let maxRetries: Int
-    private let maxBufferSizeKB: Int
     
     // MARK: - Errors
     
@@ -30,17 +29,14 @@ actor GenerationOrchestrator {
     ///   - executor: The MLXExecutor for model execution
     ///   - adaptEngine: The ADAPTEngine for constraint management
     ///   - maxRetries: Maximum retry attempts (default: 2)
-    ///   - maxBufferSizeKB: Maximum buffer size for streaming (default: 2048KB)
     init(
         executor: MLXExecutor,
         adaptEngine: ADAPTEngine,
-        maxRetries: Int = 2,
-        maxBufferSizeKB: Int = 2048
+        maxRetries: Int = 2
     ) {
         self.executor = executor
         self.adaptEngine = adaptEngine
         self.maxRetries = maxRetries
-        self.maxBufferSizeKB = maxBufferSizeKB
     }
     
     // MARK: - Generation Methods
@@ -67,16 +63,12 @@ actor GenerationOrchestrator {
                 // Choose generation method based on schema presence
                 // Prefer hierarchical schema if available
                 if let schemaNode = request.schema {
-                    print("🔍 [GenerationOrchestrator] Using ADAPT with hierarchical schema")
-                    print("📋 [GenerationOrchestrator] Root keys: \(schemaNode.objectKeys)")
-                    print("📋 [GenerationOrchestrator] Required: \(schemaNode.required)")
                     text = try await adaptEngine.generateWithSchema(
                         executor: executor,
                         prompt: prompt,
                         schema: schemaNode,
                         parameters: sampling
                     )
-                    print("✅ [GenerationOrchestrator] ADAPT generation complete: \(text)")
                 } else {
                     // Direct execution without constraints
                     let genParams = GenerateParameters(
@@ -232,8 +224,7 @@ extension GenerationOrchestrator {
         return OrchestratorMetrics(
             modelID: modelID,
             adaptCacheSize: adaptMetrics.cacheSize,
-            maxRetries: maxRetries,
-            maxBufferSizeKB: maxBufferSizeKB
+            maxRetries: maxRetries
         )
     }
 }
@@ -244,5 +235,4 @@ public struct OrchestratorMetrics: Sendable {
     public let modelID: String?
     public let adaptCacheSize: Int
     public let maxRetries: Int
-    public let maxBufferSizeKB: Int
 }

@@ -131,7 +131,7 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     private let heavyState = Mutex<HeavyState>(HeavyState())
     
     // New init with SchemaNode for nested object support
-    public init(schema: SchemaNode?, tokenizer: any Tokenizer) {
+    public init(schema: SchemaNode?, tokenizer: any Tokenizer, cachedIndex: SchemaTrieIndex? = nil) {
         let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
         self.schemaRoot = schema
         self.tokenizer = tokenizer
@@ -142,9 +142,13 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             includeWhitespace: false
         )
         
-        // Build schema index if schema provided
-        if let schema = schema {
+        // キャッシュされたIndexを使用、なければ新規作成
+        if let cachedIndex = cachedIndex {
+            self.schemaIndex = cachedIndex
+            Logger.debug("[TokenTrieLogitProcessor] Using cached SchemaTrieIndex")
+        } else if let schema = schema {
             self.schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
+            Logger.debug("[TokenTrieLogitProcessor] Created new SchemaTrieIndex")
         } else {
             self.schemaIndex = nil
         }

@@ -53,84 +53,48 @@ public actor MLXBackend {
     }
     
     
-    func generateText(
-        prompt: String,
-        sampling: SamplingParameters
-    ) async throws -> String {
-        guard await hasModel() else {
-            throw MLXBackendError.noModelSet
-        }
-        
-        // Convert to GenerateParameters
-        let genParams = GenerateParameters(
-            maxTokens: sampling.maxTokens ?? 1024,
-            temperature: Float(sampling.temperature ?? 0.7),
-            topP: Float(sampling.topP ?? 1.0)
-        )
-        
-        return try await executor.execute(
-            prompt: prompt,
-            parameters: genParams
-        )
-    }
-    
-    func generateTextWithSchema(
+    // Orchestrator経由のメソッド（MLXChatEngineが使用）
+    func orchestratedGenerate(
         prompt: String,
         sampling: SamplingParameters,
-        schema: SchemaNode
+        schema: SchemaNode? = nil,
+        schemaJSON: String? = nil
     ) async throws -> String {
         guard await hasModel() else {
             throw MLXBackendError.noModelSet
         }
         
-        return try await adaptEngine.generateWithSchema(
-            executor: executor,
+        let modelID = await currentModel() ?? "unknown"
+        let responseFormat: ResponseFormatSpec
+        if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
+            responseFormat = .jsonSchema(schemaJSON: schemaJSON)
+        } else if schema != nil {
+            // schemaNodeはあるがJSONがない場合は、スキーマから生成したダミーJSONを使用
+            responseFormat = .jsonSchema(schemaJSON: "{}")
+        } else {
+            responseFormat = .text
+        }
+        
+        let req = ChatRequest(
+            modelID: modelID,
             prompt: prompt,
+            responseFormat: responseFormat,
+            sampling: sampling,
             schema: schema,
-            parameters: sampling
+            parameters: nil
         )
+        
+        let response = try await orchestrator.generate(req)
+        return response.choices.first?.content ?? ""
     }
     
     
-    func streamText(
-        prompt: String,
-        sampling: SamplingParameters
-    ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                guard await hasModel() else {
-                    continuation.finish(throwing: MLXBackendError.noModelSet)
-                    return
-                }
-                
-                // Convert to GenerateParameters
-                let genParams = GenerateParameters(
-                    maxTokens: sampling.maxTokens ?? 1024,
-                    temperature: Float(sampling.temperature ?? 0.7),
-                    topP: Float(sampling.topP ?? 1.0)
-                )
-                
-                let stream = await executor.executeStream(
-                    prompt: prompt,
-                    parameters: genParams
-                )
-                
-                do {
-                    for try await chunk in stream {
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-        }
-    }
-    
-    func streamTextWithSchema(
+    // Orchestrator経由のストリーミング（MLXChatEngineが使用）
+    func orchestratedStream(
         prompt: String,
         sampling: SamplingParameters,
-        schema: SchemaNode
+        schema: SchemaNode? = nil,
+        schemaJSON: String? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -139,16 +103,36 @@ public actor MLXBackend {
                     return
                 }
                 
-                let stream = await adaptEngine.streamWithSchema(
-                    executor: executor,
+                let modelID = await currentModel() ?? "unknown"
+                let responseFormat: ResponseFormatSpec
+                if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
+                    responseFormat = .jsonSchema(schemaJSON: schemaJSON)
+                } else if schema != nil {
+                    // schemaNodeはあるがJSONがない場合は、スキーマから生成したダミーJSONを使用
+                    responseFormat = .jsonSchema(schemaJSON: "{}")
+                } else {
+                    responseFormat = .text
+                }
+                
+                let req = ChatRequest(
+                    modelID: modelID,
                     prompt: prompt,
+                    responseFormat: responseFormat,
+                    sampling: sampling,
                     schema: schema,
-                    parameters: sampling
+                    parameters: nil
                 )
+                
+                let stream = await orchestrator.stream(req)
                 
                 do {
                     for try await chunk in stream {
-                        continuation.yield(chunk)
+                        // Extract text from ChatChunk
+                        for delta in chunk.deltas {
+                            if let text = delta.deltaText {
+                                continuation.yield(text)
+                            }
+                        }
                     }
                     continuation.finish()
                 } catch {
