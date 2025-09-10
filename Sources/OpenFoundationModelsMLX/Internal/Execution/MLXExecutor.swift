@@ -96,23 +96,41 @@ public actor MLXExecutor {
                 )
                 
                 // Generate with custom iterator
-                let stream = MLXLMCommon.generate(
+                let baseStream = MLXLMCommon.generate(
                     input: input,
                     context: context,
                     iterator: iterator
                 )
                 
-                // Collect output
-                var result = ""
-                for try await generation in stream {
-                    switch generation {
-                    case .chunk(let text):
-                        result += text
-                    case .info, .toolCall:
-                        break
+                // Wrap with AbortableGenerator if processor supports error checking
+                if let errorCheckable = processor as? ErrorCheckable {
+                    let abortor = AbortableGenerator(processor: errorCheckable)
+                    let stream = abortor.generate(baseStream: baseStream)
+                    
+                    // Collect output with error detection
+                    var result = ""
+                    for try await generation in stream {
+                        switch generation {
+                        case .chunk(let text):
+                            result += text
+                        case .info, .toolCall:
+                            break
+                        }
                     }
+                    return result
+                } else {
+                    // Collect output without error detection
+                    var result = ""
+                    for await generation in baseStream {
+                        switch generation {
+                        case .chunk(let text):
+                            result += text
+                        case .info, .toolCall:
+                            break
+                        }
+                    }
+                    return result
                 }
-                return result
             } else {
                 // Standard generation without constraints
                 let output = try MLXLMCommon.generate(
@@ -150,7 +168,7 @@ public actor MLXExecutor {
                         let userInput = UserInput(prompt: .text(prompt))
                         let input = try await context.processor.prepare(input: userInput)
                         
-                        let stream: AsyncStream<Generation>
+                        let stream: AsyncThrowingStream<Generation, Error>
                         
                         if let processor = logitProcessor {
                             // Use custom iterator with logit processor
@@ -165,20 +183,46 @@ public actor MLXExecutor {
                                 maxTokens: parameters.maxTokens
                             )
                             
-                            stream = MLXLMCommon.generate(
+                            let baseStream = MLXLMCommon.generate(
                                 input: input,
                                 context: context,
                                 iterator: iterator
                             )
+                            
+                            // Wrap with AbortableGenerator if processor supports error checking
+                            if let errorCheckable = processor as? ErrorCheckable {
+                                let abortor = AbortableGenerator(processor: errorCheckable)
+                                stream = abortor.generate(baseStream: baseStream)
+                            } else {
+                                // Convert AsyncStream to AsyncThrowingStream without error checking
+                                stream = AsyncThrowingStream { continuation in
+                                    Task {
+                                        for await generation in baseStream {
+                                            continuation.yield(generation)
+                                        }
+                                        continuation.finish()
+                                    }
+                                }
+                            }
                         } else {
                             // Standard streaming without constraints
-                            stream = try MLXLMCommon.generate(
+                            let baseStream = try MLXLMCommon.generate(
                                 input: input,
                                 parameters: parameters,
                                 context: context
                             )
+                            // Convert AsyncStream to AsyncThrowingStream
+                            stream = AsyncThrowingStream { continuation in
+                                Task {
+                                    for await generation in baseStream {
+                                        continuation.yield(generation)
+                                    }
+                                    continuation.finish()
+                                }
+                            }
                         }
                         
+                        // Process stream (either wrapped with AbortableGenerator or standard)
                         for try await generation in stream {
                             switch generation {
                             case .chunk(let text):

@@ -36,6 +36,7 @@ public actor ADAPTEngine {
         schema: SchemaNode,
         parameters: SamplingParameters
     ) async throws -> String {
+        print("🔧 ADAPT: Schema received with \(schema.objectKeys.count) keys: \(schema.objectKeys)")
         // Get model container from executor
         guard let container = await executor.getModelContainer() else {
             throw ADAPTError.noTokenizer
@@ -46,11 +47,13 @@ public actor ADAPTEngine {
             let tokenizer = context.tokenizer
             
             // Create constraint processor with nested schema support
+            print("🔧 ADAPT: Building TokenTrie for schema with kind: \(schema.kind)")
             let constraintProcessor = TokenTrieLogitProcessor(
                 schema: schema,
                 tokenizer: tokenizer
             )
             constraintProcessor.clearError()
+            print("🔧 ADAPT: TokenTrieLogitProcessor created successfully")
             
             // Convert sampling parameters to generation parameters
             let genParams = GenerateParameters(
@@ -67,8 +70,10 @@ public actor ADAPTEngine {
             )
             
             let isValid = JSONValidator.validate(text: result, schema: schema)
+            print("🔧 ADAPT: Validation result: \(isValid ? "✅ success" : "❌ failure")")
             
             if !isValid {
+                print("🔧 ADAPT: Generated text: \(result)")
                 throw ADAPTError.validationFailed("Generated JSON does not match schema")
             }
             
@@ -96,11 +101,13 @@ public actor ADAPTEngine {
                         let tokenizer = context.tokenizer
                         
                         // Create constraint processor with nested schema support
+                        print("🔧 ADAPT: [Stream] Building TokenTrie for schema with kind: \(schema.kind)")
                         let constraintProcessor = TokenTrieLogitProcessor(
                             schema: schema,
                             tokenizer: tokenizer
                         )
                         constraintProcessor.clearError()
+                        print("🔧 ADAPT: [Stream] TokenTrieLogitProcessor created successfully")
                         
                         // Convert parameters
                         let genParams = GenerateParameters(
@@ -131,12 +138,15 @@ public actor ADAPTEngine {
                             
                             // Check for JSON completion
                             if jsonState.isComplete() {
+                                print("🔧 ADAPT: [Stream] JSON completed, validating...")
                                 // Validate complete JSON with hierarchical schema
                                 if JSONValidator.validate(text: buffer, schema: schema) {
+                                    print("🔧 ADAPT: [Stream] Validation ✅ success")
                                     continuation.yield(chunk)
                                     continuation.finish()
                                     return
                                 } else {
+                                    print("🔧 ADAPT: [Stream] Validation ❌ failure for: \(buffer)")
                                     throw ADAPTError.validationFailed("Complete JSON does not match schema")
                                 }
                             }
@@ -151,7 +161,10 @@ public actor ADAPTEngine {
                         }
                         
                         // Final validation with hierarchical schema
-                        if !JSONValidator.validate(text: buffer, schema: schema) {
+                        let finalValid = JSONValidator.validate(text: buffer, schema: schema)
+                        print("🔧 ADAPT: [Stream] Final validation: \(finalValid ? "✅ success" : "❌ failure")")
+                        if !finalValid {
+                            print("🔧 ADAPT: [Stream] Final buffer: \(buffer)")
                             throw ADAPTError.validationFailed("Final JSON does not match schema")
                         }
                         

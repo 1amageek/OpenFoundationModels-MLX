@@ -89,7 +89,7 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     
     
     private enum Context: Sendable {
-        case object(SchemaNode)
+        case object(SchemaNode?)  // Made optional to handle unknown objects
         case array(SchemaNode?)
     }
     
@@ -144,8 +144,11 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         
         // Build schema index if schema provided
         if let schema = schema {
+            print("🔍 ADAPT: Initializing TokenTrieLogitProcessor with schema kind: \(schema.kind)")
             self.schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
+            print("🔍 ADAPT: SchemaTrieIndex created successfully")
         } else {
+            print("🔍 ADAPT: No schema provided, running without constraints")
             self.schemaIndex = nil
         }
         
@@ -229,9 +232,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                 newObjectNode = childNode
             } else {
                 // Unknown object structure
-                let emptyNode = SchemaNode(kind: .object)
-                newStack.append(.object(emptyNode))
-                newObjectNode = emptyNode
+                newStack.append(.object(nil))
+                // Keep parent node as current
             }
             newPendingKey = nil
             
@@ -276,8 +278,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                 // Found matching object, update current node
                 newObjectNode = nil
                 for ctx in newStack.reversed() {
-                    if case .object(let node) = ctx {
-                        newObjectNode = node
+                    if case .object(let node) = ctx, let actualNode = node {
+                        newObjectNode = actualNode
                         break
                     }
                 }
@@ -336,26 +338,28 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         var useHardMask = false
 
         if isInKey {
+            print("🔍 ADAPT: Applying constraints in key phase: \(snap.jsonPhase)")
             if let trie = currentTrie {
                 allowed = trie.getAllowedTokens(for: snap.tokenPath)
+                print("🔍 ADAPT: Allowed tokens for path: \(allowed.count) tokens")
                 
                 if snap.tokenPath.isAtTerminal() {
                     let quoteCandidates = dynamicQuoteCandidates(from: logits, fallback: specialTokens.quoteTokens)
                     allowed.formUnion(quoteCandidates)
                     allowed.formUnion(specialTokens.backslashTokens)
                 }
+                useHardMask = true
+                
+                if allowed.isEmpty && !snap.tokenPath.isAtTerminal() {
+                    throw JSONGenerationError.noValidTokens(
+                        partialKey: tokenizerAdapter.decode(snap.tokenPath.tokens),
+                        position: snap.tokenPath.tokens.count
+                    )
+                }
             } else {
-                allowed = Set(0..<Int32(logits.dim(logits.ndim - 1)))
-            }
-
-            // Don't intersect with vocabulary to preserve dynamic quote candidates
-            useHardMask = true
-
-            if allowed.isEmpty && !snap.tokenPath.isAtTerminal() {
-                throw JSONGenerationError.noValidTokens(
-                    partialKey: tokenizerAdapter.decode(snap.tokenPath.tokens),
-                    position: snap.tokenPath.tokens.count
-                )
+                // No trie available - don't apply mask (use soft hints or raw logits)
+                print("🔍 ADAPT: No trie available in key phase, skipping hard mask")
+                useHardMask = false
             }
         } else {
             if let h = hint {
@@ -372,16 +376,16 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         }
 
         if useHardMask {
+            print("🔍 ADAPT: Applying hard mask with \(allowed.count) allowed tokens")
             return try applyHardMaskOptimized(to: logits, allowedTokens: allowed)
         }
         if let h = hint {
             if h.mode == .soft, !h.prefer.isEmpty {
+                print("🔍 ADAPT: Applying soft bias with \(h.prefer.count) preferred tokens")
                 return MLXUtils.applySoftBias(logits: logits, preferredTokens: h.prefer, bias: 2.5)
             }
         }
-        if isInKey && !allowed.isEmpty {
-            return try applyHardMaskOptimized(to: logits, allowedTokens: allowed)
-        }
+        // This condition is now redundant - removed to avoid double processing
 
         return logits
     }
@@ -471,26 +475,39 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             
             if generatedText.contains("{") {
                 if let key = newPendingKey {
+                    print("🔍 ADAPT: Context switch - entering object for key: \(key)")
                 }
                 
-                if let key = newPendingKey,
-                   let parentNode = newObjectNode,
-                   let childNode = parentNode.properties[key],
-                   childNode.kind == .object {
+                // Check if we're in an array context first (more specific)
+                if let last = newContextStack.last,
+                   case .array(let itemNode) = last,
+                   let objNode = itemNode, objNode.kind == .object {
+                    // Array-of-object: descend into items' object node
+                    newContextStack.append(.object(objNode))
+                    newObjectNode = objNode
+                } else if let key = newPendingKey,
+                          let parentNode = newObjectNode,
+                          let childNode = parentNode.properties[key],
+                          childNode.kind == .object {
+                    // Object property that is another object
                     newContextStack.append(.object(childNode))
                     newObjectNode = childNode
                 } else {
-                    let emptyNode = SchemaNode(kind: .object)
-                    newContextStack.append(.object(emptyNode))
-                    newObjectNode = emptyNode
+                    // Unknown object - push nil context and disable key constraints inside it
+                    newContextStack.append(.object(nil))
+                    newObjectNode = nil  // Clear to disable parent's Trie
                 }
                 newPendingKey = nil
-                if let trie = schemaIndex?.trie(for: newObjectNode ?? SchemaNode(kind: .object)) {
+                // Only reset if we have a valid node with a trie
+                if let node = newObjectNode, let trie = schemaIndex?.trie(for: node) {
                     newTokenPath.reset(to: trie.root)
+                } else {
+                    newTokenPath.reset()  // Reset without trie
                 }
             }
             
             if generatedText.contains("[") {
+                print("🔍 ADAPT: Context switch - entering array")
                 if let key = newPendingKey,
                    let parentNode = newObjectNode,
                    let childNode = parentNode.properties[key],
@@ -511,14 +528,16 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                 }
                 newObjectNode = nil
                 for ctx in newContextStack.reversed() {
-                    if case .object(let node) = ctx {
-                        newObjectNode = node
+                    if case .object(let node) = ctx, let actualNode = node {
+                        newObjectNode = actualNode
                         break
                     }
                 }
-                if let node = newObjectNode,
-                   let trie = schemaIndex?.trie(for: node) {
+                // Only reset if we have a valid node with a trie
+                if let node = newObjectNode, let trie = schemaIndex?.trie(for: node) {
                     newTokenPath.reset(to: trie.root)
+                } else {
+                    newTokenPath.reset()  // Reset without trie
                 }
             }
             
@@ -526,6 +545,20 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                 while let last = newContextStack.last {
                     newContextStack.removeLast()
                     if case .array = last { break }
+                }
+                // Recompute current object node (mirror of '}' case)
+                newObjectNode = nil
+                for ctx in newContextStack.reversed() {
+                    if case .object(let node) = ctx, let actualNode = node {
+                        newObjectNode = actualNode
+                        break
+                    }
+                }
+                // Reset token path for the current object context
+                if let node = newObjectNode, let trie = schemaIndex?.trie(for: node) {
+                    newTokenPath.reset(to: trie.root)
+                } else {
+                    newTokenPath.reset()  // Reset without trie
                 }
             }
             

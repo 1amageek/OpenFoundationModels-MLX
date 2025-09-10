@@ -9,16 +9,21 @@ public struct JSONValidator {
     ///   - schema: Hierarchical schema node
     /// - Returns: true if valid, false otherwise
     public static func validate(text: String, schema: SchemaNode) -> Bool {
+        print("✅ ADAPT: Starting validation")
+        print("✅ ADAPT: Text to validate: \(text)")
         guard let data = text.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) else {
+            print("✅ ADAPT: Validation ❌ failed - could not parse JSON")
             print("❌ [JSONValidator] Failed to parse JSON")
             return false
         }
         
         let result = validateValue(root, against: schema, path: "root")
         if result {
+            print("✅ ADAPT: Validation ✅ passed")
             print("✅ [JSONValidator] JSON validation passed")
         } else {
+            print("✅ ADAPT: Validation ❌ failed - schema mismatch")
             print("❌ [JSONValidator] JSON validation failed")
         }
         return result
@@ -37,6 +42,7 @@ public struct JSONValidator {
             for requiredKey in schema.required {
                 guard let fieldValue = object[requiredKey],
                       !(fieldValue is NSNull) else {
+                    print("✅ ADAPT: Validation ❌ failed - missing required field '\(requiredKey)' at \(path)")
                     print("❌ [JSONValidator] Missing required field '\(requiredKey)' at \(path)")
                     return false
                 }
@@ -88,6 +94,11 @@ public struct JSONValidator {
             return true
             
         case .number:
+            // Bool is a subtype of NSNumber, so exclude it first
+            if value is Bool {
+                print("❌ [JSONValidator] Expected number at \(path), got boolean")
+                return false
+            }
             guard value is NSNumber || value is Int || value is Double || value is Float else {
                 print("❌ [JSONValidator] Expected number at \(path), got \(type(of: value))")
                 return false

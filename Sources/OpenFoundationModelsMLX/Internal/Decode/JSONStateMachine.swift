@@ -103,7 +103,11 @@ public final class JSONStateMachine: Sendable {
     
     public func processCharacter(_ char: Character) {
         state.withLock { state in
+            let oldPhase = state.phase
             processCharacterInternal(char, &state)
+            if oldPhase != state.phase {
+                print("📊 ADAPT: Phase transition: \(oldPhase) → \(state.phase)")
+            }
         }
     }
     
@@ -115,10 +119,12 @@ public final class JSONStateMachine: Sendable {
                 state.phase = .inObject(.expectKeyFirstQuote)
                 state.depth += 1
                 state.stack.append(Frame(isObject: true))
+                print("📊 ADAPT: Context stack: push object (depth: \(state.depth))")
             } else if char == "[" {
                 state.phase = .inArray(.expectValue)
                 state.depth += 1
                 state.stack.append(Frame(isObject: false))
+                print("📊 ADAPT: Context stack: push array (depth: \(state.depth))")
             } else if char == "\"" {
                 // Root-level string
                 state.phase = .inString(.body(kind: .value, escaped: false))
@@ -136,6 +142,7 @@ public final class JSONStateMachine: Sendable {
                 state.phase = .inLiteral(.n1)
             } else if !char.isWhitespace {
                 // Invalid character at root
+                print("📊 ADAPT: Error detected at root with character: '\(char)'")
                 state.phase = .error
             }
             
@@ -147,6 +154,7 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "}" {
                     state.depth -= 1
                     _ = state.stack.popLast()
+                    print("📊 ADAPT: Context stack: pop object (depth: \(state.depth))")
                     if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {
@@ -186,6 +194,7 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "}" {
                     state.depth -= 1
                     _ = state.stack.popLast()
+                    print("📊 ADAPT: Context stack: pop object (depth: \(state.depth))")
                     if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {

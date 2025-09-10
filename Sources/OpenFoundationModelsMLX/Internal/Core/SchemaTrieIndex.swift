@@ -28,13 +28,16 @@ public struct SchemaTrieIndex: Sendable {
                 // Build trie for this object's keys
                 let keys = node.objectKeys
                 if !keys.isEmpty {
+                    print("🌳 ADAPT: Creating TokenTrie for object at path '\(path)' with keys: \(keys)")
                     let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
                     triesMap[nodeId] = trie
                     
                     // Create fallback key signature and store trie
                     let keySignature = keys.joined(separator: ",")
                     keyTriesMap[keySignature] = trie
+                    print("🌳 ADAPT: TokenTrie created with \(trie.allKeys.count) keys")
                 } else {
+                    print("🌳 ADAPT: Empty object at path '\(path)', no TokenTrie created")
                 }
                 
                 // Recursively process child properties
@@ -57,6 +60,7 @@ public struct SchemaTrieIndex: Sendable {
         buildTries(for: root)
         self.triesByNode = triesMap
         self.triesByKeys = keyTriesMap
+        print("🌳 ADAPT: SchemaTrieIndex built with \(triesMap.count) TokenTries")
         
     }
     
@@ -68,6 +72,7 @@ public struct SchemaTrieIndex: Sendable {
         
         // Try primary lookup by ObjectIdentifier
         if let result = triesByNode[nodeId] {
+            print("🌳 ADAPT: Looking up Trie for node - found with \(result.allKeys.count) keys: \(result.allKeys)")
             return result
         }
         
@@ -77,10 +82,13 @@ public struct SchemaTrieIndex: Sendable {
             if !keys.isEmpty {
                 let keySignature = keys.joined(separator: ",")
                 if let fallbackResult = triesByKeys[keySignature] {
+                    print("🌳 ADAPT: Fallback lookup succeeded for keys: \(keys)")
                     return fallbackResult
                 } else {
+                    print("🌳 ADAPT: No Trie found for keys: \(keys)")
                 }
             } else {
+                // Silently return nil for empty objects
             }
         }
         
