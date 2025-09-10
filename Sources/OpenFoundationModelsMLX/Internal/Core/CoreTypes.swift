@@ -3,79 +3,6 @@ import Synchronization
 
 // Core types needed for schema-constrained decoding
 
-/// Schema metadata for JSON generation with injection protection
-public struct SchemaMeta: Sendable {
-    public let keys: [String]
-    public let required: [String]
-    
-    public init(keys: [String], required: [String] = []) {
-        // Validate keys to prevent JSON injection
-        let sanitizedKeys = keys.compactMap { key -> String? in
-            // Check for potentially dangerous characters
-            guard Self.isValidJSONKey(key) else {
-                Logger.warning("[SchemaMeta] Rejected potentially dangerous key: '\(key)'")
-                return nil
-            }
-            return key
-        }
-        
-        self.keys = sanitizedKeys
-        self.required = required.filter { sanitizedKeys.contains($0) }
-        
-        if sanitizedKeys.count < keys.count {
-            Logger.warning("[SchemaMeta] Sanitized \(keys.count - sanitizedKeys.count) potentially dangerous keys")
-        }
-    }
-    
-    /// Validate a JSON key to prevent injection attacks
-    private static func isValidJSONKey(_ key: String) -> Bool {
-        // Reject empty keys
-        guard !key.isEmpty else { return false }
-        
-        // Reject keys with control characters
-        let controlCharacters = CharacterSet.controlCharacters
-        if key.rangeOfCharacter(from: controlCharacters) != nil {
-            return false
-        }
-        
-        // Reject keys with special JSON characters that could break structure
-        let dangerousChars = ["\"", "\\", "\n", "\r", "\t", "\0"]
-        for char in dangerousChars {
-            if key.contains(char) {
-                return false
-            }
-        }
-        
-        // Reject excessively long keys (potential DoS)
-        if key.count > 256 {
-            return false
-        }
-        
-        // Reject keys that look like code injection attempts
-        let injectionPatterns = [
-            "__proto__",      // Prototype pollution
-            "constructor",    // Constructor injection
-            "prototype",      // Prototype manipulation
-            "$where",         // MongoDB injection
-            "$regex",         // Regex injection
-            "eval",          // Code execution
-            "Function",      // Function constructor
-            "<script",       // XSS attempt
-            "javascript:",   // JavaScript protocol
-            "onclick",       // Event handler injection
-        ]
-        
-        let lowercased = key.lowercased()
-        for pattern in injectionPatterns {
-            if lowercased.contains(pattern) {
-                return false
-            }
-        }
-        
-        return true
-    }
-}
-
 // Token-level trie for schema keys
 public struct TokenTrie: Sendable {
     public final class Node: @unchecked Sendable { 
@@ -225,33 +152,4 @@ public enum TokenTrieBuilder {
         return trie
     }
     
-    public static func build(from schema: SchemaMeta, tokenizer: TokenizerAdapter) -> TokenTrie {
-        return build(keys: schema.keys, tokenizer: tokenizer)
-    }
-    
-    public static func buildCached(schema: SchemaMeta, tokenizer: TokenizerAdapter) -> TokenTrie {
-        // Cache key = tokenizer fingerprint + schema keys (sorted)
-        let tokenizerFingerprint = tokenizer.fingerprint()
-        let schemaKey = schema.keys.sorted().joined(separator: "|")
-        let cacheKey = "\(tokenizerFingerprint)|\(schemaKey)" as NSString
-
-        // Use explicit closure to handle cache access safely
-        let cachedTrie = cacheMutex.withLock { _ -> TokenTrie? in
-            trieCache.object(forKey: cacheKey)?.value
-        }
-        
-        if let cached = cachedTrie {
-            return cached
-        }
-        
-        // Build outside lock to avoid blocking other threads
-        let trie = build(from: schema, tokenizer: tokenizer)
-        
-        // Store in cache
-        cacheMutex.withLock { _ -> Void in
-            trieCache.setObject(TokenTrieBox(trie), forKey: cacheKey)
-        }
-        
-        return trie
-    }
 }

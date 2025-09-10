@@ -290,7 +290,14 @@ struct TokenTrieLogitProcessorTests {
     
     @Test("TokenTrieLogitProcessor hasError detection")
     func processorHasErrorDetection() {
-        let schema = SchemaMeta(keys: ["name", "age"], required: ["name"])
+        let schema = SchemaNode(
+            kind: .object,
+            properties: [
+                "name": SchemaNode.any,
+                "age": SchemaNode.any
+            ],
+            required: ["name"]
+        )
         let tokenizer = MockSwiftTokenizer()
         let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
         
@@ -306,7 +313,11 @@ struct TokenTrieLogitProcessorTests {
     
     @Test("TokenTrieLogitProcessor clearError")
     func processorClearError() {
-        let schema = SchemaMeta(keys: ["test"], required: [])
+        let schema = SchemaNode(
+            kind: .object,
+            properties: ["test": SchemaNode.any],
+            required: []
+        )
         let tokenizer = MockSwiftTokenizer()
         let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
         
@@ -377,7 +388,14 @@ struct TokenTrieLogitProcessorTests {
         trie.insert(tokenIDs: [100, 101], keyName: "name")
         trie.insert(tokenIDs: [200], keyName: "age")
         
-        let schema = SchemaMeta(keys: ["name", "age"], required: [])
+        let schema = SchemaNode(
+            kind: .object,
+            properties: [
+                "name": SchemaNode.any,
+                "age": SchemaNode.any
+            ],
+            required: []
+        )
         let tokenizer = MockSwiftTokenizer()
         let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
         

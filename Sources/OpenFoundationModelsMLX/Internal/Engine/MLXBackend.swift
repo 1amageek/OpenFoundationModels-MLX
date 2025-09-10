@@ -11,7 +11,7 @@ public actor MLXBackend {
     private let adaptEngine: ADAPTEngine
     private let orchestrator: GenerationOrchestrator
     
-    // MARK: - Legacy Error Type (for compatibility)
+    // MARK: - Error Type
     
     public enum MLXBackendError: LocalizedError {
         case noModelSet
@@ -38,7 +38,7 @@ public actor MLXBackend {
         )
     }
     
-    // MARK: - Model Management (Legacy Interface)
+    // MARK: - Model Management
     
     public func setModel(_ container: ModelContainer, modelID: String? = nil) async {
         await executor.setModel(container, modelID: modelID)
@@ -56,7 +56,7 @@ public actor MLXBackend {
         return await executor.hasModel()
     }
     
-    // MARK: - Text Generation (Legacy Interface)
+    // MARK: - Text Generation
     
     func generateText(
         prompt: String,
@@ -97,7 +97,7 @@ public actor MLXBackend {
         )
     }
     
-    // MARK: - Streaming Generation (Legacy Interface)
+    // MARK: - Streaming Generation
     
     func streamText(
         prompt: String,

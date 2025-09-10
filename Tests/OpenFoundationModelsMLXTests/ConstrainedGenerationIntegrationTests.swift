@@ -12,8 +12,13 @@ struct ConstrainedGenerationIntegrationTests {
     @Test("Successful constrained generation")
     func successfulConstrainedGeneration() throws {
         // Setup schema
-        let schema = SchemaMeta(
-            keys: ["name", "age", "email"],
+        let schema = SchemaNode(
+            kind: .object,
+            properties: [
+                "name": SchemaNode.any,
+                "age": SchemaNode.any,
+                "email": SchemaNode.any
+            ],
             required: ["name", "email"]
         )
         
@@ -22,7 +27,7 @@ struct ConstrainedGenerationIntegrationTests {
         
         // Build TokenTrie with encoded keys
         var trie = OpenFoundationModelsMLX.TokenTrie()
-        for key in schema.keys {
+        for key in schema.objectKeys {
             let tokens = tokenizer.encode(key)
             trie.insert(tokenIDs: tokens, keyName: key)
         }
@@ -50,7 +55,14 @@ struct ConstrainedGenerationIntegrationTests {
     @Test("Retry on constraint violation")
     func retryOnConstraintViolation() async throws {
         // Setup processor with schema
-        let schema = SchemaMeta(keys: ["firstName", "lastName"], required: ["firstName"])
+        let schema = SchemaNode(
+            kind: .object,
+            properties: [
+                "firstName": SchemaNode.any,
+                "lastName": SchemaNode.any
+            ],
+            required: ["firstName"]
+        )
         let tokenizer = MockTokenizer()
         let swiftTokenizer = MockSwiftTokenizer()
         let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
@@ -220,15 +232,20 @@ struct ConstrainedGenerationIntegrationTests {
         // This test simulates the complete pipeline from schema to validated JSON
         
         // 1. Setup
-        let schema = SchemaMeta(
-            keys: ["id", "name", "active"],
+        let schema = SchemaNode(
+            kind: .object,
+            properties: [
+                "id": SchemaNode.any,
+                "name": SchemaNode.any,
+                "active": SchemaNode.any
+            ],
             required: ["id", "name"]
         )
         
         let tokenizer = MockTokenizer()
         
         // 2. Build TokenTrie
-        let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+        let trie = TokenTrieBuilder.build(keys: ["id", "name", "active"], tokenizer: tokenizer)
         #expect(trie.allKeys.count == 3)
         
         // 3. Create processor
@@ -248,8 +265,16 @@ struct ConstrainedGenerationIntegrationTests {
         #expect(!stateMachine.isError())
         
         // 6. Validate schema compliance
-        let validator = JSONValidator(allowExtraKeys: false, enableSnap: true)
-        #expect(validator.validate(text: validJSON, schema: schema))
+        let schemaNode = SchemaNode(
+            kind: .object,
+            properties: [
+                "id": SchemaNode.any,
+                "name": SchemaNode.any,
+                "active": SchemaNode.any
+            ],
+            required: ["id", "name"]
+        )
+        #expect(JSONValidator.validate(text: validJSON, schema: schemaNode))
         
         // 7. Parse result
         if let data = validJSON.data(using: .utf8),
@@ -266,14 +291,21 @@ struct ConstrainedGenerationIntegrationTests {
     
     @Test("Concurrent generation")
     func concurrentGeneration() async throws {
-        let schema = SchemaMeta(keys: ["key1", "key2"], required: ["key1"])
+        let schema = SchemaNode(
+            kind: .object,
+            properties: [
+                "key1": SchemaNode.any,
+                "key2": SchemaNode.any
+            ],
+            required: ["key1"]
+        )
         let tokenizer = MockTokenizer()
         
         // Test concurrent trie building
         await withTaskGroup(of: TokenTrie.self) { group in
             for _ in 0..<5 {
                 group.addTask {
-                    return TokenTrieBuilder.buildCached(schema: schema, tokenizer: tokenizer)
+                    return TokenTrieBuilder.build(keys: ["key1", "key2"], tokenizer: tokenizer)
                 }
             }
             
@@ -282,7 +314,7 @@ struct ConstrainedGenerationIntegrationTests {
                 tries.append(trie)
             }
             
-            // All tries should be the same (cached)
+            // All tries should be valid
             #expect(tries.count == 5)
             for trie in tries {
                 #expect(trie.allKeys == Set(["key1", "key2"]))

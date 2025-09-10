@@ -208,10 +208,10 @@ struct TokenTrieTests {
     
     @Test("Builds from schema")
     func buildFromSchema() {
-        let schema = SchemaMeta(keys: ["firstName", "lastName", "email"], required: ["email"])
+        let keys = ["firstName", "lastName", "email"]
         let tokenizer = MockTokenizer()
         
-        let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+        let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
         #expect(trie.allKeys.sorted() == ["email", "firstName", "lastName"])
         
@@ -224,10 +224,10 @@ struct TokenTrieTests {
     
     @Test("Filters empty keys")
     func filterEmptyKeys() {
-        let schema = SchemaMeta(keys: ["valid", "", "  ", "another"], required: [])
+        let keys = ["valid", "", "  ", "another"]
         let tokenizer = MockTokenizer()
         
-        let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+        let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
         // Note: Only truly empty strings are filtered, not whitespace-only strings
         #expect(trie.allKeys.sorted() == ["  ", "another", "valid"])
@@ -235,10 +235,10 @@ struct TokenTrieTests {
     
     @Test("Handles duplicate keys")
     func handleDuplicateKeys() {
-        let schema = SchemaMeta(keys: ["key1", "key1", "key2"], required: [])
+        let keys = ["key1", "key1", "key2"]
         let tokenizer = MockTokenizer()
         
-        let trie = TokenTrieBuilder.build(from: schema, tokenizer: tokenizer)
+        let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
         #expect(trie.allKeys.sorted() == ["key1", "key2"])  // Duplicates removed
     }
@@ -247,14 +247,14 @@ struct TokenTrieTests {
     
     @Test("Caches built tries")
     func cacheBuiltTries() {
-        let schema = SchemaMeta(keys: ["test"], required: [])
+        let keys = ["test"]
         let tokenizer = MockTokenizer()
         
-        // First build - should create and cache
-        let trie1 = TokenTrieBuilder.buildCached(schema: schema, tokenizer: tokenizer)
+        // Build multiple times
+        let trie1 = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
-        // Second build - should return cached
-        let trie2 = TokenTrieBuilder.buildCached(schema: schema, tokenizer: tokenizer)
+        // Build again
+        let trie2 = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
         // Should have same keys (caching works based on content)
         #expect(trie1.allKeys == trie2.allKeys)
@@ -262,12 +262,12 @@ struct TokenTrieTests {
     
     @Test("Different schemas produce different tries")
     func differentSchemasDifferentTries() {
-        let schema1 = SchemaMeta(keys: ["key1"], required: [])
-        let schema2 = SchemaMeta(keys: ["key2"], required: [])
+        let keys1 = ["key1"]
+        let keys2 = ["key2"]
         let tokenizer = MockTokenizer()
         
-        let trie1 = TokenTrieBuilder.buildCached(schema: schema1, tokenizer: tokenizer)
-        let trie2 = TokenTrieBuilder.buildCached(schema: schema2, tokenizer: tokenizer)
+        let trie1 = TokenTrieBuilder.build(keys: keys1, tokenizer: tokenizer)
+        let trie2 = TokenTrieBuilder.build(keys: keys2, tokenizer: tokenizer)
         
         // Different schemas should produce different tries
         #expect(trie1.allKeys != trie2.allKeys)

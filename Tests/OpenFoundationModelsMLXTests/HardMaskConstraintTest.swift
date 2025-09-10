@@ -41,13 +41,9 @@ class HardMaskConstraintTest: XCTestCase {
         let schemaNode = SchemaBuilder.fromJSONSchema(schemaDict)
         print("✅ Schema created with root keys: \(schemaNode.objectKeys)")
         
-        // 2. Create legacy schema for testing (since we need to use the simpler init)
-        let legacySchema = SchemaMeta(
-            keys: ["name", "age", "contact"],
-            required: ["name", "age"]
-        )
+        // 2. Create processor with schema node
         let mockTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: legacySchema, tokenizer: mockTokenizer)
+        let processor = TokenTrieLogitProcessor(schema: schemaNode, tokenizer: mockTokenizer)
         
         print("✅ TokenTrieLogitProcessor created")
         
@@ -131,12 +127,8 @@ class HardMaskConstraintTest: XCTestCase {
         }
         
         let schemaNode = SchemaBuilder.fromJSONSchema(schemaDict)
-        let legacySchema = SchemaMeta(
-            keys: ["name", "age", "contact"],
-            required: ["name", "age"]
-        )
         let mockTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: legacySchema, tokenizer: mockTokenizer)
+        let processor = TokenTrieLogitProcessor(schema: schemaNode, tokenizer: mockTokenizer)
         
         let logits = MLX.ones([1, 1000]) * 5.0
         

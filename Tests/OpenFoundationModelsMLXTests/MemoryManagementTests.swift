@@ -95,17 +95,17 @@ struct MemoryManagementTests {
     
     @Test("TokenTrie cache concurrency")
     func tokenTrieCacheConcurrency() async throws {
-        let schema1 = SchemaMeta(keys: ["key1", "key2"], required: [])
-        let schema2 = SchemaMeta(keys: ["key3", "key4"], required: [])
+        let keys1 = ["key1", "key2"]
+        let keys2 = ["key3", "key4"]
         let tokenizer = MockTokenizer()
         
         // Concurrent cache access
         await withTaskGroup(of: TokenTrie.self) { group in
             // Multiple concurrent builds
             for i in 0..<20 {
-                let schema = i % 2 == 0 ? schema1 : schema2
+                let keys = i % 2 == 0 ? keys1 : keys2
                 group.addTask {
-                    return TokenTrieBuilder.buildCached(schema: schema, tokenizer: tokenizer)
+                    return TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
                 }
             }
             
@@ -165,7 +165,11 @@ struct MemoryManagementTests {
     
     @Test("Safety constraints on error")
     func safetyConstraintsOnError() throws {
-        let schema = SchemaMeta(keys: ["test"], required: [])
+        let schema = SchemaNode(
+            kind: .object,
+            properties: ["test": SchemaNode.any],
+            required: []
+        )
         let tokenizer = MockSwiftTokenizer()
         let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
         
@@ -288,16 +292,9 @@ struct MemoryManagementTests {
         // Should handle without crashes
     }
     
-    @Test("ModelLoader memory configuration")
-    func modelLoaderMemoryConfiguration() async throws {
+    @Test("ModelLoader cache management")
+    func modelLoaderCacheManagement() async throws {
         let loader = ModelLoader()
-        
-        // Test memory configuration methods
-        loader.configureMemoryLimit(1_073_741_824) // 1GB
-        
-        // Test memory usage estimation
-        let estimatedUsage = loader.estimatedMemoryUsage()
-        #expect(estimatedUsage >= 0)
         
         // Test cache clearing
         loader.clearCache()
