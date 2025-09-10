@@ -89,10 +89,16 @@ public struct JSONMaskHintGenerator: Sendable {
     ) -> JSONMaskHint? {
         
         switch objPhase {
-        case .expectKeyFirstQuote:
-            // Allow quote to start key or } to close object
+        case .expectKeyOrEnd:
+            // After { - allow quote to start key or } to close empty object
             let allowed = specialTokens.quoteTokens
                 .union(specialTokens.braceCloseTokens)
+                .union(ws)
+            return JSONMaskHint(allow: allowed)
+            
+        case .expectKey:
+            // After , - only allow quote to start key (no } allowed - would be trailing comma)
+            let allowed = specialTokens.quoteTokens
                 .union(ws)
             return JSONMaskHint(allow: allowed)
             

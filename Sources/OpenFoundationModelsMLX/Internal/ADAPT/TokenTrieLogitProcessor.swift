@@ -462,17 +462,28 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             }
             
             if generatedText.contains("{") {
-                if newPendingKey != nil {
-                    // Key was confirmed, will be used below
-                }
+                // Check if this is the root object start
+                let prevPhase = lightweightState.withLock { $0.jsonPhase }
                 
-                // Check if we're in an array context first (more specific)
-                if let last = newContextStack.last,
+                if prevPhase == .root {
+                    // Root object: keep existing context [.object(root)] and currentObjectNode
+                    // Just reset the token path for the root trie
+                    if let node = newObjectNode, let trie = schemaIndex?.trie(for: node) {
+                        newTokenPath.reset(to: trie.root)
+                    } else {
+                        newTokenPath.reset()
+                    }
+                } else if let last = newContextStack.last,
                    case .array(let itemNode) = last,
                    let objNode = itemNode, objNode.kind == .object {
                     // Array-of-object: descend into items' object node
                     newContextStack.append(.object(objNode))
                     newObjectNode = objNode
+                    if let trie = schemaIndex?.trie(for: objNode) {
+                        newTokenPath.reset(to: trie.root)
+                    } else {
+                        newTokenPath.reset()
+                    }
                 } else if let key = newPendingKey,
                           let parentNode = newObjectNode,
                           let childNode = parentNode.properties[key],
@@ -480,18 +491,18 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                     // Object property that is another object
                     newContextStack.append(.object(childNode))
                     newObjectNode = childNode
+                    if let trie = schemaIndex?.trie(for: childNode) {
+                        newTokenPath.reset(to: trie.root)
+                    } else {
+                        newTokenPath.reset()
+                    }
                 } else {
-                    // Unknown object - push nil context and disable key constraints inside it
+                    // Only for truly unknown objects (not root)
                     newContextStack.append(.object(nil))
                     newObjectNode = nil  // Clear to disable parent's Trie
+                    newTokenPath.reset()
                 }
                 newPendingKey = nil
-                // Only reset if we have a valid node with a trie
-                if let node = newObjectNode, let trie = schemaIndex?.trie(for: node) {
-                    newTokenPath.reset(to: trie.root)
-                } else {
-                    newTokenPath.reset()  // Reset without trie
-                }
             }
             
             if generatedText.contains("[") {
@@ -626,8 +637,14 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         let indices = Array(allow.filter { $0 >= 0 && $0 < vocab })
 
         if indices.isEmpty {
-            // Slightly dampen output when masking is impossible
-            return logits * 0.9
+            // Special handling for done phase with no EOS token
+            if case .done = snap.jsonPhase {
+                // No EOS token available - return original logits to allow natural termination
+                return logits
+            } else {
+                // For other cases, apply safety constraints to encourage termination
+                return applySafetyConstraints(logits)
+            }
         }
 
         var mask = [Float](repeating: 0, count: vocab)

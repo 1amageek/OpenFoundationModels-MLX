@@ -17,7 +17,8 @@ public final class JSONStateMachine: Sendable {
     }
     
     public enum ObjectPhase: Sendable, Equatable {
-        case expectKeyFirstQuote
+        case expectKeyOrEnd      // After { - allows " or }
+        case expectKey           // After , - only allows "
         case expectColon
         case expectValueStart
         case afterValue
@@ -116,7 +117,7 @@ public final class JSONStateMachine: Sendable {
         switch state.phase {
         case .root:
             if char == "{" {
-                state.phase = .inObject(.expectKeyFirstQuote)
+                state.phase = .inObject(.expectKeyOrEnd)
                 state.depth += 1
                 state.stack.append(Frame(isObject: true))
                 print("📊 ADAPT: Context stack: push object (depth: \(state.depth))")
@@ -148,10 +149,11 @@ public final class JSONStateMachine: Sendable {
             
         case .inObject(let objPhase):
             switch objPhase {
-            case .expectKeyFirstQuote:
+            case .expectKeyOrEnd:
                 if char == "\"" {
                     state.phase = .inString(.body(kind: .key, escaped: false))
                 } else if char == "}" {
+                    // Empty object is allowed after {
                     state.depth -= 1
                     _ = state.stack.popLast()
                     print("📊 ADAPT: Context stack: pop object (depth: \(state.depth))")
@@ -160,6 +162,15 @@ public final class JSONStateMachine: Sendable {
                     } else if let frame = state.stack.last {
                         state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
                     }
+                }
+                
+            case .expectKey:
+                if char == "\"" {
+                    state.phase = .inString(.body(kind: .key, escaped: false))
+                } else if !char.isWhitespace {
+                    // } is NOT allowed after comma - this would be a trailing comma
+                    print("📊 ADAPT: Error - trailing comma detected (got '\(char)' after comma)")
+                    state.phase = .error
                 }
                 
             case .expectColon:
@@ -171,7 +182,7 @@ public final class JSONStateMachine: Sendable {
                 if char == "\"" {
                     state.phase = .inString(.body(kind: .value, escaped: false))
                 } else if char == "{" {
-                    state.phase = .inObject(.expectKeyFirstQuote)
+                    state.phase = .inObject(.expectKeyOrEnd)
                     state.depth += 1
                     state.stack.append(Frame(isObject: true))
                 } else if char == "[" {
@@ -190,7 +201,7 @@ public final class JSONStateMachine: Sendable {
                 
             case .afterValue:
                 if char == "," {
-                    state.phase = .inObject(.expectKeyFirstQuote)
+                    state.phase = .inObject(.expectKey)
                 } else if char == "}" {
                     state.depth -= 1
                     _ = state.stack.popLast()
@@ -241,7 +252,7 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "\"" {
                     state.phase = .inString(.body(kind: .value, escaped: false))
                 } else if char == "{" {
-                    state.phase = .inObject(.expectKeyFirstQuote)
+                    state.phase = .inObject(.expectKeyOrEnd)
                     state.depth += 1
                     state.stack.append(Frame(isObject: true))
                 } else if char == "[" {
