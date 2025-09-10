@@ -54,6 +54,33 @@ public final class SchemaNode: @unchecked Sendable {
             return false
         }
     }
+    
+    /// Generate a cache key for this schema node
+    /// Used by ADAPTEngine to cache TokenTrie structures
+    public func cacheKey() -> String {
+        switch kind {
+        case .object:
+            let sortedKeys = properties.keys.sorted()
+            let keyString = sortedKeys.joined(separator: ",")
+            let requiredString = required.sorted().joined(separator: ",")
+            return "object:\(keyString)|required:\(requiredString)"
+        case .array:
+            if let items = items {
+                return "array:[\(items.cacheKey())]"
+            }
+            return "array:[]"
+        case .string:
+            return "string"
+        case .number:
+            return "number"
+        case .boolean:
+            return "boolean"
+        case .null:
+            return "null"
+        case .any:
+            return "any"
+        }
+    }
 }
 
 // MARK: - Convenience Initializers

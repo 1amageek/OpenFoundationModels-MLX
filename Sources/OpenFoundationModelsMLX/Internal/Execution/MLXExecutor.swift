@@ -248,4 +248,17 @@ public actor MLXExecutor {
     public func getModelContainer() -> ModelContainer? {
         return modelContainer
     }
+    
+    /// Safely access tokenizer without nested perform calls
+    /// - Parameter body: Closure that receives the tokenizer
+    /// - Returns: The result of the body closure
+    public func withTokenizer<T: Sendable>(_ body: @Sendable (any Tokenizer) throws -> T) async throws -> T {
+        guard let container = modelContainer else {
+            throw ExecutorError.noModelSet
+        }
+        
+        return try await container.perform { (context: ModelContext) in
+            try body(context.tokenizer)
+        }
+    }
 }

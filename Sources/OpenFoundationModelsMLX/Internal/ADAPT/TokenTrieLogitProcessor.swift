@@ -144,11 +144,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         
         // Build schema index if schema provided
         if let schema = schema {
-            print("🔍 ADAPT: Initializing TokenTrieLogitProcessor with schema kind: \(schema.kind)")
             self.schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
-            print("🔍 ADAPT: SchemaTrieIndex created successfully")
         } else {
-            print("🔍 ADAPT: No schema provided, running without constraints")
             self.schemaIndex = nil
         }
         
@@ -338,10 +335,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         var useHardMask = false
 
         if isInKey {
-            print("🔍 ADAPT: Applying constraints in key phase: \(snap.jsonPhase)")
             if let trie = currentTrie {
                 allowed = trie.getAllowedTokens(for: snap.tokenPath)
-                print("🔍 ADAPT: Allowed tokens for path: \(allowed.count) tokens")
                 
                 if snap.tokenPath.isAtTerminal() {
                     let quoteCandidates = dynamicQuoteCandidates(from: logits, fallback: specialTokens.quoteTokens)
@@ -358,7 +353,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                 }
             } else {
                 // No trie available - don't apply mask (use soft hints or raw logits)
-                print("🔍 ADAPT: No trie available in key phase, skipping hard mask")
                 useHardMask = false
             }
         } else {
@@ -371,22 +365,17 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
                     // Empty allowed for soft bias
                     break
                 }
-            } else {
             }
         }
 
         if useHardMask {
-            print("🔍 ADAPT: Applying hard mask with \(allowed.count) allowed tokens")
             return try applyHardMaskOptimized(to: logits, allowedTokens: allowed)
         }
         if let h = hint {
             if h.mode == .soft, !h.prefer.isEmpty {
-                print("🔍 ADAPT: Applying soft bias with \(h.prefer.count) preferred tokens")
                 return MLXUtils.applySoftBias(logits: logits, preferredTokens: h.prefer, bias: 2.5)
             }
         }
-        // This condition is now redundant - removed to avoid double processing
-
         return logits
     }
     
@@ -407,12 +396,12 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     
     private func applySafetyConstraints(_ logits: MLXArray) -> MLXArray {
         guard let eosToken = tokenizerAdapter.eosTokenId() else {
-            return logits * 0.7
+            return logits
         }
         
         let vocabSize = logits.dim(logits.ndim - 1)
         guard eosToken >= 0 && eosToken < vocabSize else {
-            return logits * 0.7
+            return logits
         }
         
         let eosMask = MLXUtils.createVocabMask(vocabSize: vocabSize, tokens: [eosToken])
@@ -420,8 +409,7 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
         shape[logits.ndim - 1] = vocabSize
         
         let boost = eosMask.reshaped(shape) * 5.0
-        let boostedLogits = logits + boost
-        return boostedLogits * 0.8
+        return logits + boost
     }
     
     public func didSample(token: MLXArray) {
@@ -474,8 +462,8 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             }
             
             if generatedText.contains("{") {
-                if let key = newPendingKey {
-                    print("🔍 ADAPT: Context switch - entering object for key: \(key)")
+                if newPendingKey != nil {
+                    // Key was confirmed, will be used below
                 }
                 
                 // Check if we're in an array context first (more specific)
@@ -507,7 +495,6 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
             }
             
             if generatedText.contains("[") {
-                print("🔍 ADAPT: Context switch - entering array")
                 if let key = newPendingKey,
                    let parentNode = newObjectNode,
                    let childNode = parentNode.properties[key],
@@ -655,31 +642,43 @@ public final class TokenTrieLogitProcessor: LogitProcessor, Sendable {
     
 
     /// Dynamic quote candidates for tokenizers without standalone quote tokens
-    private func dynamicQuoteCandidates(from logits: MLXArray, topK: Int = 256, fallback: Set<Int32>) -> Set<Int32> {
+    private func dynamicQuoteCandidates(from logits: MLXArray, topK: Int = 30, fallback: Set<Int32>) -> Set<Int32> {
         // Use fallback if already available
         if !fallback.isEmpty { return fallback }
+        
+        // Use argPartition for O(V) complexity instead of O(V log V)
+        let flat = logits.reshaped([-1])
+        let n = flat.dim(0)
+        let k = min(topK, n)
+        
+        // Partition to get top-k indices (kth largest at position n-k)
+        let partitionedIndices = MLX.argPartition(flat, kth: n - k, axis: 0)
+        
+        // Get the top-k indices (they are at the end after partition)
+        let topIndices = partitionedIndices[(n - k)..<n]
+        
+        // Extract indices and their values for sorting
+        let indicesArray = topIndices.asArray(Int32.self)
+        var indexValuePairs: [(Int32, Float)] = []
+        for idx in indicesArray {
+            let value = flat[Int(idx)].item(Float.self)
+            indexValuePairs.append((idx, value))
+        }
+        
+        // Sort by value descending (highest logits first)
+        indexValuePairs.sort { $0.1 > $1.1 }
+        
         var out = Set<Int32>()
-        for i in topKIndices(logits, k: topK) {
-            let tid = Int32(i)
+        
+        // Process from highest logit to lowest
+        for (tid, _) in indexValuePairs {
             let piece = tokenizerAdapter.decodeToken(tid)
             if piece.contains("\"") { out.insert(tid) }
         }
+        
         // Always allow escape sequences
         out.formUnion(specialTokens.backslashTokens)
         return out
-    }
-
-    private func topKIndices(_ logits: MLXArray, k: Int) -> [Int] {
-        // Simple CPU implementation for terminal cases
-        let flat = logits.reshaped([-1])
-        let n = flat.dim(0)
-        var arr: [(Float, Int)] = []
-        arr.reserveCapacity(n)
-        for i in 0..<n {
-            arr.append((flat[i].item(Float.self), i))
-        }
-        arr.sort { $0.0 > $1.0 }
-        return arr.prefix(k).map { $0.1 }
     }
     
     

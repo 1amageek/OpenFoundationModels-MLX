@@ -18,12 +18,11 @@ enum OptionsMapper {
 
         // Extract sampling mode parameters
         // NOTE: SamplingMode.Kind is private, so we cannot directly compare mode types.
-        // We infer greedy mode from temperature=0 as a safe fallback.
+        // Set temperature to 0.0 if not specified but temperature is 0
         if options.temperature == 0 {
             if sampling.temperature == nil { 
                 sampling.temperature = 0.0 
             }
-            sampling.topK = 1
         }
 
         return sampling

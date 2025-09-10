@@ -36,49 +36,43 @@ public actor ADAPTEngine {
         schema: SchemaNode,
         parameters: SamplingParameters
     ) async throws -> String {
-        print("🔧 ADAPT: Schema received with \(schema.objectKeys.count) keys: \(schema.objectKeys)")
-        // Get model container from executor
-        guard let container = await executor.getModelContainer() else {
-            throw ADAPTError.noTokenizer
-        }
+        Logger.debug("[ADAPT] Schema received with \(schema.objectKeys.count) keys: \(schema.objectKeys)")
         
-        // Execute within model context to get tokenizer
-        return try await container.perform { (context: ModelContext) async throws -> String in
-            let tokenizer = context.tokenizer
-            
-            // Create constraint processor with nested schema support
-            print("🔧 ADAPT: Building TokenTrie for schema with kind: \(schema.kind)")
-            let constraintProcessor = TokenTrieLogitProcessor(
+        // Get tokenizer safely without nesting perform
+        let constraintProcessor = try await executor.withTokenizer { tokenizer in
+            Logger.debug("[ADAPT] Building TokenTrie for schema with kind: \(schema.kind)")
+            let processor = TokenTrieLogitProcessor(
                 schema: schema,
                 tokenizer: tokenizer
             )
-            constraintProcessor.clearError()
-            print("🔧 ADAPT: TokenTrieLogitProcessor created successfully")
-            
-            // Convert sampling parameters to generation parameters
-            let genParams = GenerateParameters(
-                maxTokens: parameters.maxTokens ?? 1024,
-                temperature: Float(parameters.temperature ?? 0.7),
-                topP: Float(parameters.topP ?? 1.0)
-            )
-            
-            // Execute with constraints
-            let result = try await executor.execute(
-                prompt: prompt,
-                parameters: genParams,
-                logitProcessor: constraintProcessor
-            )
-            
-            let isValid = JSONValidator.validate(text: result, schema: schema)
-            print("🔧 ADAPT: Validation result: \(isValid ? "✅ success" : "❌ failure")")
-            
-            if !isValid {
-                print("🔧 ADAPT: Generated text: \(result)")
-                throw ADAPTError.validationFailed("Generated JSON does not match schema")
-            }
-            
-            return result
+            processor.clearError()
+            Logger.debug("[ADAPT] TokenTrieLogitProcessor created successfully")
+            return processor
         }
+        
+        // Convert sampling parameters to generation parameters
+        let genParams = GenerateParameters(
+            maxTokens: parameters.maxTokens ?? 1024,
+            temperature: Float(parameters.temperature ?? 0.7),
+            topP: Float(parameters.topP ?? 1.0)
+        )
+        
+        // Execute with constraints - no nested perform
+        let result = try await executor.execute(
+            prompt: prompt,
+            parameters: genParams,
+            logitProcessor: constraintProcessor
+        )
+        
+        let isValid = JSONValidator.validate(text: result, schema: schema)
+        Logger.debug("[ADAPT] Validation result: \(isValid ? "success" : "failure")")
+        
+        if !isValid {
+            Logger.debug("[ADAPT] Generated text: \(result)")
+            throw ADAPTError.validationFailed("Generated JSON does not match schema")
+        }
+        
+        return result
     }
     
     /// Stream text generation with schema constraints
@@ -91,85 +85,78 @@ public actor ADAPTEngine {
         AsyncThrowingStream { continuation in
             Task {
                 do {
-                    // Get model container from executor
-                    guard let container = await executor.getModelContainer() else {
-                        throw ADAPTError.noTokenizer
-                    }
-                    
-                    // Need to create processor within container context
-                    try await container.perform { (context: ModelContext) async throws in
-                        let tokenizer = context.tokenizer
-                        
-                        // Create constraint processor with nested schema support
-                        print("🔧 ADAPT: [Stream] Building TokenTrie for schema with kind: \(schema.kind)")
-                        let constraintProcessor = TokenTrieLogitProcessor(
+                    // Get tokenizer safely without nesting perform
+                    let constraintProcessor = try await executor.withTokenizer { tokenizer in
+                        Logger.debug("[ADAPT] [Stream] Building TokenTrie for schema with kind: \(schema.kind)")
+                        let processor = TokenTrieLogitProcessor(
                             schema: schema,
                             tokenizer: tokenizer
                         )
-                        constraintProcessor.clearError()
-                        print("🔧 ADAPT: [Stream] TokenTrieLogitProcessor created successfully")
-                        
-                        // Convert parameters
-                        let genParams = GenerateParameters(
-                            maxTokens: parameters.maxTokens ?? 1024,
-                            temperature: Float(parameters.temperature ?? 0.7),
-                            topP: Float(parameters.topP ?? 1.0)
-                        )
-                        
-                        // Get base stream from executor
-                        let baseStream = await executor.executeStream(
-                            prompt: prompt,
-                            parameters: genParams,
-                            logitProcessor: constraintProcessor
-                        )
-                        
-                        // Buffer for validation
-                        var buffer = ""
-                        let jsonState = JSONStateMachine()
-                        
-                        // Process stream with ADAPT constraints
-                        for try await chunk in baseStream {
-                            buffer += chunk
-                            
-                            // Update JSON state
-                            for char in chunk {
-                                jsonState.processCharacter(char)
-                            }
-                            
-                            // Check for JSON completion
-                            if jsonState.isComplete() {
-                                print("🔧 ADAPT: [Stream] JSON completed, validating...")
-                                // Validate complete JSON with hierarchical schema
-                                if JSONValidator.validate(text: buffer, schema: schema) {
-                                    print("🔧 ADAPT: [Stream] Validation ✅ success")
-                                    continuation.yield(chunk)
-                                    continuation.finish()
-                                    return
-                                } else {
-                                    print("🔧 ADAPT: [Stream] Validation ❌ failure for: \(buffer)")
-                                    throw ADAPTError.validationFailed("Complete JSON does not match schema")
-                                }
-                            }
-                            
-                            // Check for errors
-                            if jsonState.isError() {
-                                throw ADAPTError.abortedGeneration("JSON parsing error detected")
-                            }
-                            
-                            // Yield chunk if valid so far
-                            continuation.yield(chunk)
-                        }
-                        
-                        // Final validation with hierarchical schema
-                        let finalValid = JSONValidator.validate(text: buffer, schema: schema)
-                        print("🔧 ADAPT: [Stream] Final validation: \(finalValid ? "✅ success" : "❌ failure")")
-                        if !finalValid {
-                            print("🔧 ADAPT: [Stream] Final buffer: \(buffer)")
-                            throw ADAPTError.validationFailed("Final JSON does not match schema")
-                        }
-                        
-                        continuation.finish()
+                        processor.clearError()
+                        Logger.debug("[ADAPT] [Stream] TokenTrieLogitProcessor created successfully")
+                        return processor
                     }
+                    
+                    // Convert parameters
+                    let genParams = GenerateParameters(
+                        maxTokens: parameters.maxTokens ?? 1024,
+                        temperature: Float(parameters.temperature ?? 0.7),
+                        topP: Float(parameters.topP ?? 1.0)
+                    )
+                    
+                    // Get base stream from executor - no nested perform
+                    let baseStream = await executor.executeStream(
+                        prompt: prompt,
+                        parameters: genParams,
+                        logitProcessor: constraintProcessor
+                    )
+                    
+                    // Buffer for validation
+                    var buffer = ""
+                    let jsonState = JSONStateMachine()
+                    
+                    // Process stream with ADAPT constraints
+                    for try await chunk in baseStream {
+                        buffer += chunk
+                        
+                        // Update JSON state
+                        for char in chunk {
+                            jsonState.processCharacter(char)
+                        }
+                        
+                        // Check for JSON completion
+                        if jsonState.isComplete() {
+                            Logger.debug("[ADAPT] [Stream] JSON completed, validating...")
+                            // Validate complete JSON with hierarchical schema
+                            if JSONValidator.validate(text: buffer, schema: schema) {
+                                Logger.debug("[ADAPT] [Stream] Validation success")
+                                continuation.yield(chunk)
+                                continuation.finish()
+                                return
+                            } else {
+                                Logger.debug("[ADAPT] [Stream] Validation failure for: \(buffer)")
+                                throw ADAPTError.validationFailed("Complete JSON does not match schema")
+                            }
+                        }
+                        
+                        // Check for errors before yielding
+                        if jsonState.isError() {
+                            throw ADAPTError.abortedGeneration("JSON parsing error detected")
+                        }
+                        
+                        // Yield chunk only if no error
+                        continuation.yield(chunk)
+                    }
+                    
+                    // Final validation with hierarchical schema
+                    let finalValid = JSONValidator.validate(text: buffer, schema: schema)
+                    Logger.debug("[ADAPT] [Stream] Final validation: \(finalValid ? "success" : "failure")")
+                    if !finalValid {
+                        Logger.debug("[ADAPT] [Stream] Final buffer: \(buffer)")
+                        throw ADAPTError.validationFailed("Final JSON does not match schema")
+                    }
+                    
+                    continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
