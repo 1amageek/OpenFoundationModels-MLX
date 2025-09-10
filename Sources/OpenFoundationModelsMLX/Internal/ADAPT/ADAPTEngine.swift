@@ -4,17 +4,10 @@ import MLXLMCommon
 import MLXLLM
 import Tokenizers
 
-/// ADAPTEngine manages the Adaptive Dynamic Assertion Protocol for Transformers.
-/// It handles schema-constrained generation, token-level constraints, and JSON validation.
-/// This engine operates independently of the execution layer and orchestration logic.
 public actor ADAPTEngine {
-    
-    // MARK: - Properties
     
     private var trieCache: [String: TokenTrie] = [:]
     private let maxCacheSize = 100
-    
-    // MARK: - Errors
     
     public enum ADAPTError: LocalizedError {
         case noTokenizer
@@ -36,15 +29,7 @@ public actor ADAPTEngine {
         }
     }
     
-    // MARK: - Schema-Constrained Generation
-    
     /// Generate text with schema constraints using the ADAPT system
-    /// - Parameters:
-    ///   - executor: The MLXExecutor to use for model execution
-    ///   - prompt: The input prompt
-    ///   - schema: The hierarchical schema node for constraints
-    ///   - parameters: Sampling parameters
-    /// - Returns: Generated text that conforms to the schema
     func generateWithSchema(
         executor: MLXExecutor,
         prompt: String,
@@ -81,20 +66,9 @@ public actor ADAPTEngine {
                 logitProcessor: constraintProcessor
             )
             
-            // Validate the result
-            print("🔍 [ADAPTEngine] Validating generated JSON...")
-            print("📝 [ADAPTEngine] Generated text: \(result)")
-            print("📋 [ADAPTEngine] Schema root keys: \(schema.objectKeys)")
-            print("📋 [ADAPTEngine] Required fields: \(schema.required)")
-            
-            // Use hierarchical validator for nested schema
             let isValid = JSONValidator.validate(text: result, schema: schema)
-            print("✅ [ADAPTEngine] Validation result: \(isValid)")
             
             if !isValid {
-                print("❌ [ADAPTEngine] Validation failed!")
-                // For now, skip snap correction (would need SchemaSnapParser to be public)
-                // This could be added back if SchemaSnapParser is made public
                 throw ADAPTError.validationFailed("Generated JSON does not match schema")
             }
             
@@ -103,12 +77,6 @@ public actor ADAPTEngine {
     }
     
     /// Stream text generation with schema constraints
-    /// - Parameters:
-    ///   - executor: The MLXExecutor to use for model execution
-    ///   - prompt: The input prompt
-    ///   - schema: The hierarchical schema node for constraints
-    ///   - parameters: Sampling parameters
-    /// - Returns: Stream of generated text chunks
     func streamWithSchema(
         executor: MLXExecutor,
         prompt: String,
@@ -196,13 +164,7 @@ public actor ADAPTEngine {
         }
     }
     
-    // MARK: - Constraint Management
-    
     /// Create a LogitProcessor for the given schema
-    /// - Parameters:
-    ///   - schema: The hierarchical schema node
-    ///   - tokenizer: The tokenizer to use
-    /// - Returns: A configured LogitProcessor
     public func createLogitProcessor(
         schema: SchemaNode,
         tokenizer: Tokenizer
@@ -213,22 +175,16 @@ public actor ADAPTEngine {
         )
     }
     
-    // MARK: - Cache Management
     
-    /// Clear the TokenTrie cache
     public func clearCache() {
         trieCache.removeAll()
         Logger.info("[ADAPTEngine] Cache cleared")
     }
     
-    /// Get current cache size
     public func cacheSize() -> Int {
         return trieCache.count
     }
     
-    // MARK: - Metrics
-    
-    /// Get ADAPT system metrics
     public func getMetrics() -> ADAPTMetrics {
         return ADAPTMetrics(
             cacheSize: trieCache.count,
@@ -237,7 +193,6 @@ public actor ADAPTEngine {
     }
 }
 
-// MARK: - Supporting Types
 
 public struct ADAPTMetrics: Sendable {
     public let cacheSize: Int

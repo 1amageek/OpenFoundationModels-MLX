@@ -5,8 +5,6 @@ import Foundation
 @Suite("JSON State Machine Tests")
 struct JSONStateMachineTests {
     
-    // MARK: - Phase Transitions
-    
     @Test("Initial state is root")
     func initialState() {
         let machine = JSONStateMachine()
@@ -76,8 +74,6 @@ struct JSONStateMachineTests {
         }
     }
     
-    // MARK: - Object State Tests
-    
     @Test("Object key-value sequence")
     func objectKeyValue() {
         var machine = JSONStateMachine()
@@ -114,8 +110,6 @@ struct JSONStateMachineTests {
         #expect(machine.isComplete())
     }
     
-    // MARK: - Array State Tests
-    
     @Test("Array value sequence")
     func arrayValues() {
         var machine = JSONStateMachine()
@@ -151,8 +145,6 @@ struct JSONStateMachineTests {
         #expect(machine.phase == .done)
         #expect(machine.isComplete())
     }
-    
-    // MARK: - String State Tests
     
     @Test("Simple string value")
     func simpleString() {
@@ -193,8 +185,6 @@ struct JSONStateMachineTests {
         #expect(machine.isComplete())
     }
     
-    // MARK: - Number State Tests
-    
     @Test("Integer number")
     func integerNumber() {
         var machine = JSONStateMachine()
@@ -204,13 +194,11 @@ struct JSONStateMachineTests {
             machine.processCharacter(char)
         }
         
-        // Numbers at root level stay in their number phase
         if case .inNumber(let phase) = machine.phase {
             #expect(phase == .intNonZero)
         } else {
             Issue.record("Expected inNumber phase")
         }
-        // Note: sawTopValue tracking removed
     }
     
     @Test("Decimal number")
@@ -222,13 +210,11 @@ struct JSONStateMachineTests {
             machine.processCharacter(char)
         }
         
-        // Decimal numbers stay in their frac phase
         if case .inNumber(let phase) = machine.phase {
             #expect(phase == .frac)
         } else {
             Issue.record("Expected inNumber phase")
         }
-        // Note: sawTopValue tracking removed
     }
     
     @Test("Scientific notation")
@@ -240,13 +226,11 @@ struct JSONStateMachineTests {
             machine.processCharacter(char)
         }
         
-        // Scientific notation stays in exp phase
         if case .inNumber(let phase) = machine.phase {
             #expect(phase == .exp)
         } else {
             Issue.record("Expected inNumber phase")
         }
-        // Note: sawTopValue tracking removed
     }
     
     @Test("Negative number")
@@ -258,16 +242,12 @@ struct JSONStateMachineTests {
             machine.processCharacter(char)
         }
         
-        // Negative numbers stay in their number phase
         if case .inNumber(let phase) = machine.phase {
             #expect(phase == .intNonZero)
         } else {
             Issue.record("Expected inNumber phase")
         }
-        // Note: sawTopValue tracking removed
     }
-    
-    // MARK: - Literal State Tests
     
     @Test("True literal")
     func trueLiteral() {
@@ -308,8 +288,6 @@ struct JSONStateMachineTests {
         #expect(machine.isComplete())
     }
     
-    // MARK: - Error State Tests
-    
     @Test("Invalid character at root")
     func invalidRootCharacter() {
         var machine = JSONStateMachine()
@@ -337,16 +315,13 @@ struct JSONStateMachineTests {
         machine.processCharacter("e")
         machine.processCharacter("s")
         machine.processCharacter("t")
-        // Missing closing quote - not an error until we try to process beyond
         
         if case .inString = machine.phase {
-            #expect(Bool(true))  // Still in string state
+            #expect(Bool(true))
         } else {
             Issue.record("Should still be in string state")
         }
     }
-    
-    // MARK: - Stack Management Tests
     
     @Test("Nested object stack depth")
     func nestedObjectStack() {
@@ -356,10 +331,8 @@ struct JSONStateMachineTests {
         for char in json {
             machine.processCharacter(char)
             
-            // Check stack depth at nested points
             if char == "c" {
-                // When inside a string within nested objects, stack includes the string container
-                #expect(machine.stack.count == 3)  // Two nested objects + string container
+                #expect(machine.stack.count == 3)
             }
         }
         
@@ -381,8 +354,6 @@ struct JSONStateMachineTests {
         #expect(machine.stack.isEmpty)
     }
     
-    // MARK: - Reset Tests
-    
     @Test("Reset clears state")
     func resetClearsState() {
         var machine = JSONStateMachine()
@@ -402,8 +373,6 @@ struct JSONStateMachineTests {
         #expect(!machine.isComplete())
         #expect(!machine.isError())
     }
-    
-    // MARK: - Complex JSON Tests
     
     @Test("Complex nested JSON")
     func complexJSON() {
@@ -444,6 +413,6 @@ struct JSONStateMachineTests {
             }
         }
         
-        #expect(completedAt == json.count - 1)  // Should complete at the closing brace
+        #expect(completedAt == json.count - 1)
     }
 }

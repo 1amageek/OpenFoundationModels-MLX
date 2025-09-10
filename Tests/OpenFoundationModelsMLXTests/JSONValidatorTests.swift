@@ -1,10 +1,7 @@
 import Testing
 @testable import OpenFoundationModelsMLX
 
-// Tests for hierarchical JSON validator with static API
 struct JSONValidatorTests {
-    
-    // MARK: - Basic Validation Tests
     
     @Test("Validates simple valid JSON")
     func simpleValidJSON() {
@@ -55,8 +52,6 @@ struct JSONValidatorTests {
         #expect(JSONValidator.validate(text: alsoValidJSON, schema: schema))
     }
     
-    // MARK: - Extra Keys Tests
-    
     @Test("Allows extra keys (current implementation)")
     func allowsExtraKeys() {
         let schema = SchemaNode(
@@ -68,7 +63,6 @@ struct JSONValidatorTests {
             required: []
         )
         
-        // Note: Current implementation allows extra keys with warnings
         let jsonWithExtra = #"{"name": "John", "age": 30, "city": "Tokyo"}"#
         #expect(JSONValidator.validate(text: jsonWithExtra, schema: schema))
         
@@ -87,8 +81,6 @@ struct JSONValidatorTests {
         let emptyJSON = #"{}"#
         #expect(JSONValidator.validate(text: emptyJSON, schema: schema))
     }
-    
-    // MARK: - Type Validation Tests
     
     @Test("Validates string type")
     func stringTypeValidation() {
@@ -135,8 +127,6 @@ struct JSONValidatorTests {
         #expect(!JSONValidator.validate(text: invalidJSON, schema: schema))
     }
     
-    // MARK: - Nested Object Tests
-    
     @Test("Validates nested objects")
     func nestedObjectValidation() {
         let addressSchema = SchemaNode(
@@ -164,8 +154,6 @@ struct JSONValidatorTests {
         #expect(!JSONValidator.validate(text: missingRequiredInNested, schema: schema))
     }
     
-    // MARK: - Array Tests
-    
     @Test("Validates arrays")
     func arrayValidation() {
         let schema = SchemaNode(
@@ -186,8 +174,6 @@ struct JSONValidatorTests {
         #expect(!JSONValidator.validate(text: invalidJSON, schema: schema))
     }
     
-    // MARK: - Edge Cases
-    
     @Test("Handles malformed JSON")
     func malformedJSON() {
         let schema = SchemaNode(
@@ -196,7 +182,7 @@ struct JSONValidatorTests {
             required: []
         )
         
-        let malformedJSON = #"{"name": "John""#  // Missing closing brace
+        let malformedJSON = #"{"name": "John""#
         #expect(!JSONValidator.validate(text: malformedJSON, schema: schema))
         
         let invalidJSON = #"not json at all"#

@@ -1,9 +1,5 @@
 import Foundation
 import Synchronization
-
-// Core types needed for schema-constrained decoding
-
-// Token-level trie for schema keys
 public struct TokenTrie: Sendable {
     public final class Node: @unchecked Sendable { 
         public var children: [Int32: Node] = [:]
@@ -62,7 +58,6 @@ public struct TokenTrie: Sendable {
         return currentNode.terminal
     }
     
-    // Path tracker for maintaining state during generation
     public struct Path: Sendable {
         public private(set) var tokens: [Int32] = []
         public private(set) var currentNode: Node?
@@ -115,20 +110,14 @@ public struct TokenTrie: Sendable {
     }
 }
 
-// Tokenizer adapter protocol
 public protocol TokenizerAdapter: Sendable {
     func encode(_ text: String) -> [Int32]
     func decode(_ ids: [Int32]) -> String
     func getVocabSize() -> Int?
-    
-    /// Generate a unique identifier for this tokenizer
-    /// Used for cache key generation to prevent cross-model contamination
     func fingerprint() -> String
 }
 
-// TokenTrie builder
 public enum TokenTrieBuilder {
-    // Thread-safe cache: NSCache is thread-safe, but we use Mutex for atomic get/set operations
     private final class TokenTrieBox: NSObject { 
         let value: TokenTrie
         init(_ v: TokenTrie) { self.value = v } 

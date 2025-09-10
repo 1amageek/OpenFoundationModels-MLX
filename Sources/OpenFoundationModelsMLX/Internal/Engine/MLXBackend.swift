@@ -5,13 +5,11 @@ import MLXLMCommon
 /// This maintains backward compatibility while using the new separated layers.
 public actor MLXBackend {
     
-    // MARK: - Properties
     
     private let executor: MLXExecutor
     private let adaptEngine: ADAPTEngine
     private let orchestrator: GenerationOrchestrator
     
-    // MARK: - Error Type
     
     public enum MLXBackendError: LocalizedError {
         case noModelSet
@@ -27,7 +25,6 @@ public actor MLXBackend {
         }
     }
     
-    // MARK: - Initialization
     
     public init() {
         self.executor = MLXExecutor()
@@ -38,7 +35,6 @@ public actor MLXBackend {
         )
     }
     
-    // MARK: - Model Management
     
     public func setModel(_ container: ModelContainer, modelID: String? = nil) async {
         await executor.setModel(container, modelID: modelID)
@@ -56,7 +52,6 @@ public actor MLXBackend {
         return await executor.hasModel()
     }
     
-    // MARK: - Text Generation
     
     func generateText(
         prompt: String,
@@ -79,7 +74,6 @@ public actor MLXBackend {
         )
     }
     
-    // Generate text with schema constraints
     func generateTextWithSchema(
         prompt: String,
         sampling: SamplingParameters,
@@ -97,7 +91,6 @@ public actor MLXBackend {
         )
     }
     
-    // MARK: - Streaming Generation
     
     func streamText(
         prompt: String,
@@ -134,7 +127,6 @@ public actor MLXBackend {
         }
     }
     
-    // Stream text generation with schema constraints
     func streamTextWithSchema(
         prompt: String,
         sampling: SamplingParameters,

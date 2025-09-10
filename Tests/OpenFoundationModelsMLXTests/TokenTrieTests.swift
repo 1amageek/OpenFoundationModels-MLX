@@ -5,11 +5,8 @@ import Foundation
 @Suite("TokenTrie Tests")
 struct TokenTrieTests {
     
-    // MARK: - Mock Tokenizer
-    
     struct MockTokenizer: TokenizerAdapter {
         func encode(_ text: String) -> [Int32] {
-            // Simple ASCII encoding for testing
             return text.compactMap { char in
                 guard let ascii = char.asciiValue else { return nil }
                 return Int32(ascii)
@@ -24,28 +21,24 @@ struct TokenTrieTests {
         }
         
         func getVocabSize() -> Int? {
-            return 128  // ASCII range
+            return 128
         }
         
         func fingerprint() -> String {
-            // Simple fingerprint for test tokenizer
             return "TokenTrieTests.MockTokenizer-ASCII-128"
         }
     }
     
-    // MARK: - Basic Functionality Tests
-    
     @Test("Initializes empty trie")
     func emptyTrie() {
         let trie = TokenTrie()
-        // Root is always created, no need to check nil
         #expect(trie.allKeys.isEmpty)
     }
     
     @Test("Inserts single token sequence")
     func insertSingleSequence() {
         var trie = TokenTrie()
-        let tokens: [Int32] = [65, 66, 67]  // "ABC"
+        let tokens: [Int32] = [65, 66, 67]
         
         trie.insert(tokenIDs: tokens, keyName: "testKey")
         
@@ -66,7 +59,6 @@ struct TokenTrieTests {
         
         #expect(trie.allKeys.sorted() == ["ab", "ac", "bc"])
         
-        // Verify each path
         #expect(trie.node(for: [65, 66])?.terminal == true)
         #expect(trie.node(for: [65, 67])?.terminal == true)
         #expect(trie.node(for: [66, 67])?.terminal == true)
@@ -79,7 +71,6 @@ struct TokenTrieTests {
         trie.insert(tokenIDs: [65, 66, 67], keyName: "abc")
         trie.insert(tokenIDs: [65, 66], keyName: "ab")
         
-        // Both should be terminal
         let abNode = trie.node(for: [65, 66])
         let abcNode = trie.node(for: [65, 66, 67])
         
@@ -88,8 +79,6 @@ struct TokenTrieTests {
         #expect(abcNode?.terminal == true)
         #expect(abcNode?.keyName == "abc")
     }
-    
-    // MARK: - Path Management Tests
     
     @Test("Path initializes correctly")
     func pathInitialization() {
@@ -126,8 +115,8 @@ struct TokenTrieTests {
         var path = TokenTrie.Path(root: trie.root)
         
         #expect(path.append(65, in: trie) == true)
-        #expect(path.append(67, in: trie) == false)  // 67 not valid after 65
-        #expect(path.tokens == [65])  // Should not add invalid token
+        #expect(path.append(67, in: trie) == false)
+        #expect(path.tokens == [65])
     }
     
     @Test("Path reset functionality")
@@ -159,13 +148,11 @@ struct TokenTrieTests {
         #expect(path.isAtTerminal() == false)
         
         _ = path.append(66, in: trie)
-        #expect(path.isAtTerminal() == true)  // "ab" is terminal
+        #expect(path.isAtTerminal() == true)
         
         _ = path.append(67, in: trie)
-        #expect(path.isAtTerminal() == true)  // "abc" is also terminal
+        #expect(path.isAtTerminal() == true)
     }
-    
-    // MARK: - Allowed Tokens Tests
     
     @Test("Gets allowed tokens from root")
     func allowedTokensFromRoot() {
@@ -177,7 +164,7 @@ struct TokenTrieTests {
         #expect(result != nil)
         #expect(result?.ids.contains(65) == true)
         #expect(result?.ids.contains(67) == true)
-        #expect(result?.ids.contains(66) == false)  // Not from root
+        #expect(result?.ids.contains(66) == false)
         #expect(result?.atTerminal == false)
     }
     
@@ -200,11 +187,9 @@ struct TokenTrieTests {
         var trie = TokenTrie()
         trie.insert(tokenIDs: [65, 66], keyName: "ab")
         
-        let result = trie.allowedNext(from: [67, 68])  // Invalid path
+        let result = trie.allowedNext(from: [67, 68])
         #expect(result == nil)
     }
-    
-    // MARK: - Builder Tests
     
     @Test("Builds from schema")
     func buildFromSchema() {
@@ -215,7 +200,6 @@ struct TokenTrieTests {
         
         #expect(trie.allKeys.sorted() == ["email", "firstName", "lastName"])
         
-        // Verify each key is encoded and inserted
         let firstNameTokens = tokenizer.encode("firstName")
         let node = trie.node(for: firstNameTokens)
         #expect(node?.terminal == true)
@@ -229,7 +213,6 @@ struct TokenTrieTests {
         
         let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
-        // Note: Only truly empty strings are filtered, not whitespace-only strings
         #expect(trie.allKeys.sorted() == ["  ", "another", "valid"])
     }
     
@@ -240,23 +223,18 @@ struct TokenTrieTests {
         
         let trie = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
-        #expect(trie.allKeys.sorted() == ["key1", "key2"])  // Duplicates removed
+        #expect(trie.allKeys.sorted() == ["key1", "key2"])
     }
-    
-    // MARK: - Cache Tests
     
     @Test("Caches built tries")
     func cacheBuiltTries() {
         let keys = ["test"]
         let tokenizer = MockTokenizer()
         
-        // Build multiple times
         let trie1 = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
-        // Build again
         let trie2 = TokenTrieBuilder.build(keys: keys, tokenizer: tokenizer)
         
-        // Should have same keys (caching works based on content)
         #expect(trie1.allKeys == trie2.allKeys)
     }
     
@@ -269,27 +247,23 @@ struct TokenTrieTests {
         let trie1 = TokenTrieBuilder.build(keys: keys1, tokenizer: tokenizer)
         let trie2 = TokenTrieBuilder.build(keys: keys2, tokenizer: tokenizer)
         
-        // Different schemas should produce different tries
         #expect(trie1.allKeys != trie2.allKeys)
         #expect(trie1.allKeys == ["key1"])
         #expect(trie2.allKeys == ["key2"])
     }
-    
-    // MARK: - Edge Cases
     
     @Test("Handles empty token sequence")
     func emptyTokenSequence() {
         var trie = TokenTrie()
         trie.insert(tokenIDs: [], keyName: "empty")
         
-        // Empty sequence should not create any nodes
         #expect(trie.allKeys.isEmpty)
     }
     
     @Test("Handles very long sequences")
     func longSequences() {
         var trie = TokenTrie()
-        let longTokens = Array<Int32>(1...1000)  // 1000 tokens
+        let longTokens = Array<Int32>(1...1000)
         
         trie.insert(tokenIDs: longTokens, keyName: "veryLong")
         
@@ -306,16 +280,13 @@ struct TokenTrieTests {
         let node = trie.node(for: [65, 66])
         #expect(node?.terminal == true)
         #expect(node?.keyName == nil)
-        #expect(trie.allKeys.isEmpty)  // Nil keys not tracked
+        #expect(trie.allKeys.isEmpty)
     }
-    
-    // MARK: - Performance Tests
     
     @Test("Handles many keys efficiently")
     func manyKeys() {
         var trie = TokenTrie()
         
-        // Insert 100 different keys
         for i in 0..<100 {
             let tokens = [Int32(65 + (i % 26)), Int32(i)]
             trie.insert(tokenIDs: tokens, keyName: "key\(i)")
@@ -323,8 +294,6 @@ struct TokenTrieTests {
         
         #expect(trie.allKeys.count == 100)
         
-        // Verify random access is still fast
-        // key50 was inserted with tokens [65 + (50 % 26), 50] = [89, 50]
         let testTokens = [Int32(89), Int32(50)]
         let node = trie.node(for: testTokens)
         #expect(node?.keyName == "key50")

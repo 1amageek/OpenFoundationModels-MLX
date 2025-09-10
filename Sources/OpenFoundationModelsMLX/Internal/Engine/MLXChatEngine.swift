@@ -6,30 +6,23 @@ actor MLXChatEngine {
     private let backend: MLXBackend
     private let maxBufferSizeKB: Int  // Simple buffer size configuration
 
-    /// Initialize with a pre-configured backend
-    /// - Parameters:
-    ///   - backend: MLXBackend with model already set
-    ///   - maxBufferSizeKB: Maximum buffer size for streaming (default 2048KB)
     init(backend: MLXBackend, maxBufferSizeKB: Int = 2048) {
         self.backend = backend
         self.maxBufferSizeKB = maxBufferSizeKB
     }
 
     func generate(_ req: ChatRequest) async throws -> ChatResponse {
-        // Single execution - no retries, no temperature adjustment
-        let prompt = req.prompt  // Use the pre-rendered prompt directly
+        let prompt = req.prompt
         
-        // Use SamplingParameters, converting from GenerateParameters if needed
         let sampling: SamplingParameters
         if let p = req.parameters {
-            // Convert GenerateParameters to SamplingParameters
             sampling = SamplingParameters(
                 temperature: Double(p.temperature),
                 topP: Double(p.topP),
-                topK: nil,  // GenerateParameters doesn't have topK
+                topK: nil,
                 maxTokens: p.maxTokens,
                 stop: nil,
-                seed: nil   // GenerateParameters doesn't have seed
+                seed: nil
             )
         } else {
             sampling = req.sampling
@@ -37,18 +30,15 @@ actor MLXChatEngine {
         
         let text: String
         if let schemaNode = req.schema {
-            // Use hierarchical schema
             text = try await backend.generateTextWithSchema(prompt: prompt, sampling: sampling, schema: schemaNode)
         } else {
             text = try await backend.generateText(prompt: prompt, sampling: sampling)
         }
         
-        // Single validation - throw immediately on failure
         switch req.responseFormat {
         case .text: break
         case .jsonSchema:
             if let schemaNode = req.schema {
-                // Validate with hierarchical schema
                 if JSONValidator.validate(text: text, schema: schemaNode) == false { 
                     throw ValidationError.schemaUnsatisfied 
                 }
@@ -65,7 +55,6 @@ actor MLXChatEngine {
     }
 
     func stream(_ req: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
-        // Single execution stream - no retries
         let hasSchema: Bool
         let schemaKeys: [String]
         switch req.responseFormat {
@@ -79,20 +68,19 @@ actor MLXChatEngine {
 
         return AsyncThrowingStream { continuation in
             let mainTask = Task {
-                let prompt = req.prompt  // Use the pre-rendered prompt directly
+                let prompt = req.prompt
                 
                 // Create a cancellable task for stream generation
                 let streamTask = Task { () -> AsyncThrowingStream<String, Error> in
-                    // Convert GenerateParameters to SamplingParameters if needed
                     let sampling: SamplingParameters
                     if let p = req.parameters {
                         sampling = SamplingParameters(
                             temperature: Double(p.temperature),
                             topP: Double(p.topP),
-                            topK: nil,  // GenerateParameters doesn't have topK
+                            topK: nil,
                             maxTokens: p.maxTokens,
                             stop: nil,
-                            seed: nil   // GenerateParameters doesn't have seed
+                            seed: nil
                         )
                     } else {
                         sampling = req.sampling
@@ -105,14 +93,12 @@ actor MLXChatEngine {
                     }
                 }
                 
-                // Ensure cleanup on scope exit
                 defer {
                     streamTask.cancel()
                 }
                 
                 let textStream = await streamTask.value
 
-                // If schema validation is needed, buffer and validate; otherwise pass-through
                 if hasSchema && !schemaKeys.isEmpty {
                     let bufferLimit = maxBufferSizeKB * 1024  // Convert KB to bytes
                     var tracker = JSONKeyTracker(schemaKeys: schemaKeys)
@@ -121,52 +107,45 @@ actor MLXChatEngine {
                     
                     do {
                         for try await piece in textStream {
-                            // Check for task cancellation
                             if Task.isCancelled {
                                 break
                             }
                             
                             buffer += piece
                             
-                            // Check buffer size limit
                             if buffer.utf8.count > bufferLimit {
                                 Logger.warning("[MLXChatEngine] Buffer size exceeded limit (\(bufferLimit/1024)KB)")
                                 throw ValidationError.bufferLimitExceeded
                             }
                             
-                            // Update JSON state for early completion detection
                             for char in piece {
                                 jsonState.processCharacter(char)
                             }
                             
-                            // Check for JSON error state (early termination)
                             if jsonState.isError() {
                                 Logger.debug("[MLXChatEngine] JSON error state detected")
                                 throw ValidationError.jsonMalformed
                             }
                             
-                            // Check for early completion
                             if jsonState.isComplete() {
                                 Logger.debug("[MLXChatEngine] JSON complete at depth 0, early termination")
-                                streamTask.cancel()  // Cancel upstream generation immediately
+                                streamTask.cancel()
                                 break
                             }
                             
-                            // Check for violations - fail immediately on violations
                             tracker.consume(piece)
                             if tracker.violationCount >= 3 {
                                 Logger.debug("[MLXChatEngine] Violation threshold exceeded")
-                                streamTask.cancel()  // Cancel upstream generation immediately
+                                streamTask.cancel()
                                 throw ValidationError.schemaViolations
                             }
                         }
                     } catch {
-                        streamTask.cancel()  // Ensure cancellation on any error
+                        streamTask.cancel()
                         continuation.finish(throwing: error)
                         return
                     }
 
-                    // Validate complete JSON - fail immediately if invalid
                     if case .jsonSchema = req.responseFormat,
                        let schemaNode = req.schema {
                         if JSONValidator.validate(text: buffer, schema: schemaNode) == false {
@@ -175,7 +154,6 @@ actor MLXChatEngine {
                         }
                     }
                     
-                    // Success: yield buffered content as chunks
                     let chunks = Self.chunkify(buffer, size: 512)
                     for c in chunks {
                         continuation.yield(ChatChunk(deltas: [.init(deltaText: c, finishReason: nil)]))
@@ -183,7 +161,6 @@ actor MLXChatEngine {
                     continuation.yield(ChatChunk(deltas: [.init(deltaText: nil, finishReason: "stop")]))
                     continuation.finish()
                 } else {
-                    // No schema; stream through directly
                     do {
                         for try await piece in textStream {
                             if Task.isCancelled { break }
@@ -203,7 +180,6 @@ actor MLXChatEngine {
     }
 }
 
-// MARK: - Validation errors
 
 private enum ValidationError: Error { 
     case schemaUnsatisfied
@@ -212,7 +188,6 @@ private enum ValidationError: Error {
     case schemaViolations
 }
 
-// MARK: - Utility helpers
 
 private extension MLXChatEngine {
     static func chunkify(_ s: String, size: Int) -> [String] {

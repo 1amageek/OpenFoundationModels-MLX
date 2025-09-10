@@ -55,7 +55,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         print("🔍 [MLXLanguageModel] Extracting schema information...")
         print("📝 [MLXLanguageModel] Schema JSON: \(ext.schemaJSON ?? "nil")")
         
-        // Map transcript response format -> schema meta
         let responseFormat: ResponseFormatSpec = {
             if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
                 print("📋 [MLXLanguageModel] Using JSON schema response format")
@@ -65,7 +64,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             return .text
         }()
         
-        // Extract hierarchical schema for nested object support
         let schemaNode: SchemaNode? = {
             switch responseFormat {
             case .jsonSchema(let json):
@@ -84,7 +82,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         
-        // Build ChatRequest
         let sampling = OptionsMapper.map(options)
         let directParams: GenerateParameters? = (options == nil) ? card.params : nil
         
@@ -110,17 +107,12 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 return .response(.init(assetIDs: [], segments: [.text(.init(content: text))]))
             }
         } catch let error as CancellationError {
-            // Rethrow cancellation errors without wrapping
             throw error
         } catch let error as MLXBackend.MLXBackendError {
-            // Map backend errors with more detail
             throw GenerationError.decodingFailure(.init(debugDescription: "Backend error: \(error.localizedDescription)"))
         } catch {
-            // Map other internal errors onto the public GenerationError surface
             throw GenerationError.decodingFailure(.init(debugDescription: String(describing: error)))
         }
-        // If no content was produced, surface a decoding failure consistent with
-        // the public API semantics.
         throw GenerationError.decodingFailure(.init(debugDescription: "empty response"))
     }
 
@@ -128,11 +120,9 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
         
-        // Extract necessary data
         let ext = TranscriptAccess.extract(from: transcript)
         let expectsTool = ext.toolDefs.isEmpty == false
         
-        // Map transcript response format -> schema meta
         let responseFormat: ResponseFormatSpec = {
             if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
                 return .jsonSchema(schemaJSON: schemaJSON) 
@@ -140,7 +130,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             return .text
         }()
         
-        // Extract hierarchical schema for nested object support
         let schemaNode: SchemaNode? = {
             switch responseFormat {
             case .jsonSchema(let json):
@@ -159,7 +148,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         
-        // Build ChatRequest
         let sampling = OptionsMapper.map(options)
         let directParams: GenerateParameters? = (options == nil) ? card.params : nil
         
@@ -178,17 +166,14 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                     var buffer = ""
                     var emittedToolCalls = false
                     for try await chunk in stream {
-                        // Check for task cancellation
                         if Task.isCancelled {
                             break
                         }
                         
-                        // Yield text deltas as response segments (not accumulated)
                         for delta in chunk.deltas {
                             if let text = delta.deltaText, !text.isEmpty {
                                 if expectsTool {
                                     buffer += text
-                                    // Buffer limit check (2MB, same as engine)
                                     let bufferLimitBytes = 2 * 1024 * 1024
                                     if buffer.utf8.count > bufferLimitBytes {
                                         Logger.warning("[MLXLanguageModel] Tool detection buffer exceeded (\(bufferLimitBytes/1024)KB)")
@@ -208,25 +193,19 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                                 }
                             }
                             if let reason = delta.finishReason, !reason.isEmpty {
-                                // We don't emit a special entry for finish; the
-                                // stream naturally ends after this iteration.
                                 _ = reason
                             }
                         }
                     }
                     if expectsTool && !emittedToolCalls {
-                        // Fall back to text if no tool_calls detected.
                         if !buffer.isEmpty {
                             continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: buffer))])))
                         }
                     }
                     continuation.finish()
                 } catch {
-                    // Log error since AsyncStream cannot propagate errors
                     Logger.error("[MLXLanguageModel] Stream error: \(error)")
                     
-                    // Send error indicator with consistent format
-                    // Prefix with [Error] for clear identification
                     let errorMessage = "[Error] Stream generation failed: \(error.localizedDescription)"
                     continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: errorMessage))])))
                     
@@ -234,7 +213,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 }
             }
             
-            // Set up cancellation handler
             continuation.onTermination = { _ in
                 task.cancel()
             }
