@@ -19,11 +19,9 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     public init(modelContainer: ModelContainer, card: any ModelCard) async throws {
         self.card = card
         
-        // Create backend with the pre-loaded model
         let backend = MLXBackend()
         await backend.setModel(modelContainer, modelID: card.id)
         
-        // Initialize engine with the backend
         self.engine = MLXChatEngine(backend: backend)
     }
     
@@ -41,10 +39,8 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     public func supports(locale: Locale) -> Bool { true }
 
     public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
-        // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
         
-        // Extract necessary data for ChatRequest
         let ext = TranscriptAccess.extract(from: transcript)
         
         let responseFormat: ResponseFormatSpec = {
@@ -67,16 +63,13 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         
-        // パラメータを正しくマージ: card.paramsをベースに、optionsで上書き
         let mergedSampling: SamplingParameters
         let mergedParams: GenerateParameters?
         
         if options != nil {
-            // optionsが指定されている場合: OptionsMapperの結果を使用
             mergedSampling = OptionsMapper.map(options)
-            mergedParams = nil  // samplingが優先される
+            mergedParams = nil
         } else {
-            // optionsがnilの場合: card.paramsをSamplingParametersに変換
             let p = card.params
             mergedSampling = SamplingParameters(
                 temperature: Double(p.temperature),
@@ -86,7 +79,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 stop: nil,
                 seed: nil
             )
-            mergedParams = nil  // samplingに統一
+            mergedParams = nil
         }
         
         let req = ChatRequest(
@@ -100,8 +93,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         
         do {
             let res = try await engine.generate(req)
-            // Convert the assistant text into a Transcript.Entry.response in a
-            // conservative way: return plain text response segment.
             if let text = res.choices.first?.content {
                 if let entry = ToolCallDetector.entryIfPresent(text) {
                     return entry
@@ -119,7 +110,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     }
 
     public func stream(transcript: Transcript, options: GenerationOptions?) -> AsyncStream<Transcript.Entry> {
-        // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
         
         let ext = TranscriptAccess.extract(from: transcript)
@@ -145,16 +135,13 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         
-        // パラメータを正しくマージ: card.paramsをベースに、optionsで上書き
         let mergedSampling: SamplingParameters
         let mergedParams: GenerateParameters?
         
         if options != nil {
-            // optionsが指定されている場合: OptionsMapperの結果を使用
             mergedSampling = OptionsMapper.map(options)
-            mergedParams = nil  // samplingが優先される
+            mergedParams = nil
         } else {
-            // optionsがnilの場合: card.paramsをSamplingParametersに変換
             let p = card.params
             mergedSampling = SamplingParameters(
                 temperature: Double(p.temperature),
@@ -164,7 +151,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 stop: nil,
                 seed: nil
             )
-            mergedParams = nil  // samplingに統一
+            mergedParams = nil
         }
         
         let req = ChatRequest(
@@ -177,14 +164,15 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         )
         return AsyncStream { continuation in
             let task = Task {
-                let stream = await engine.stream(req)
                 do {
+                    try Task.checkCancellation()
+                    
+                    let stream = await engine.stream(req)
                     var buffer = ""
                     var emittedToolCalls = false
+                    
                     for try await chunk in stream {
-                        if Task.isCancelled {
-                            break
-                        }
+                        try Task.checkCancellation()
                         
                         for delta in chunk.deltas {
                             if let text = delta.deltaText, !text.isEmpty {
@@ -198,6 +186,9 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                                         continuation.finish()
                                         return
                                     }
+                                    
+                                    try Task.checkCancellation()
+                                    
                                     if let entry = ToolCallDetector.entryIfPresent(buffer) {
                                         continuation.yield(entry)
                                         emittedToolCalls = true
@@ -213,11 +204,17 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                             }
                         }
                     }
+                    
+                    try Task.checkCancellation()
+                    
                     if expectsTool && !emittedToolCalls {
                         if !buffer.isEmpty {
                             continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: buffer))])))
                         }
                     }
+                    continuation.finish()
+                } catch is CancellationError {
+                    // Clean up buffer on cancellation
                     continuation.finish()
                 } catch {
                     Logger.error("[MLXLanguageModel] Stream error: \(error)")
@@ -229,7 +226,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 }
             }
             
-            continuation.onTermination = { _ in
+            continuation.onTermination = { @Sendable _ in
                 task.cancel()
             }
         }

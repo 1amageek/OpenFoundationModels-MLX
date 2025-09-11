@@ -27,7 +27,7 @@ struct ConstrainedGenerationIntegrationTests {
         }
         
         let swiftTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
+        let processor = DPDAKeyTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
         
         let mockJSON = #"{"name":"John","age":30,"email":"john@example.com"}"#
         
@@ -52,7 +52,7 @@ struct ConstrainedGenerationIntegrationTests {
         )
         let tokenizer = MockTokenizer()
         let swiftTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
+        let processor = DPDAKeyTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
         
         let generator = AbortableGenerator(processor: processor)
         
@@ -83,7 +83,7 @@ struct ConstrainedGenerationIntegrationTests {
             
             if let jsonError = error as? JSONGenerationError {
                 switch jsonError {
-                case .noValidTokens, .invalidTokenSelected:
+                case .invalidTokenSelected:
                     break
                 default:
                     Issue.record("Unexpected error type: \(jsonError)")
@@ -173,7 +173,7 @@ struct ConstrainedGenerationIntegrationTests {
         
         processor.clearError()
         processor.shouldTriggerFatalError = true
-        processor.mockError = .noValidTokens(partialKey: "test", position: 10)
+        processor.mockError = .invalidTokenSelected(token: -1, partialKey: "test", expectedTokens: [])
         _ = processor.process(logits: MLX.zeros([1, 100]))
         #expect(processor.hasError())
         #expect(processor.hasFatalError())
@@ -197,7 +197,7 @@ struct ConstrainedGenerationIntegrationTests {
         #expect(trie.allKeys.count == 3)
         
         let swiftTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
+        let processor = DPDAKeyTrieLogitProcessor(schema: schema, tokenizer: swiftTokenizer)
         
         let validJSON = #"{"id":123,"name":"Test","active":true}"#
         

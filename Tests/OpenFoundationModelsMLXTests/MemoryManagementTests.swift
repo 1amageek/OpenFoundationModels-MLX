@@ -136,7 +136,7 @@ struct MemoryManagementTests {
             required: []
         )
         let tokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
+        let processor = DPDAKeyTrieLogitProcessor(schema: schema, tokenizer: tokenizer)
         
         let logits = MLX.zeros([1, 1000])
         

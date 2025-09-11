@@ -53,7 +53,7 @@ struct AbortableGeneratorTests {
         // Setup
         let processor = MockLogitProcessor()
         processor.fatalErrorAtToken = 3 // Trigger error at token 3
-        processor.mockError = .noValidTokens(partialKey: "test", position: 3)
+        processor.mockError = .abortedDueToError(position: 3)
         
         let generator = AbortableGenerator(processor: processor)
         
@@ -91,7 +91,7 @@ struct AbortableGeneratorTests {
         
         if let jsonError = caughtError as? JSONGenerationError {
             switch jsonError {
-            case .noValidTokens(_, let position):
+            case .abortedDueToError(let position):
                 #expect(position == 3)
             default:
                 Issue.record("Wrong error type")

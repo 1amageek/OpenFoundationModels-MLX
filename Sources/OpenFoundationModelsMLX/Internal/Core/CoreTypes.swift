@@ -9,6 +9,7 @@ public struct TokenTrie: Sendable {
     
     public let root = Node()
     public var allKeys: Set<String> = []
+    public var singleTokenMap: [Int32: String] = [:]  // Maps single-token IDs to key names
 
     public init() {}
 
@@ -56,6 +57,29 @@ public struct TokenTrie: Sendable {
             return false
         }
         return currentNode.terminal
+    }
+    
+    /// Get all valid tokens for starting a key (includes single-token keys)
+    public func getKeyStartTokens() -> Set<Int32> {
+        var tokens = Set<Int32>()
+        
+        // Multi-token key prefixes
+        for (tokenId, _) in root.children {
+            tokens.insert(tokenId)
+        }
+        
+        // Single-token keys
+        for tokenId in singleTokenMap.keys {
+            tokens.insert(tokenId)
+        }
+        
+        print("🚀 [TokenTrie] Key start tokens: multi=\(root.children.keys.count), single=\(singleTokenMap.count), total=\(tokens.count)")
+        return tokens
+    }
+    
+    /// Check if a token ID represents a valid single-token key
+    public func isValidSingleTokenKey(_ tokenId: Int32) -> Bool {
+        return singleTokenMap[tokenId] != nil
     }
     
     public struct Path: Sendable {
@@ -132,12 +156,41 @@ public enum TokenTrieBuilder {
         print("🔨 [TokenTrieBuilder] Building trie for keys: \(uniqueKeys)")
         
         for key in uniqueKeys {
-            let ids = tokenizer.encode(key)
-            print("🔑 [TokenTrieBuilder] Key '\(key)' encoded to tokens: \(ids)")
-            trie.insert(tokenIDs: ids, keyName: key)
+            // Try different encoding patterns to detect single-token keys
+            
+            // Pattern 1: "\"key\"" - full quoted key
+            let fullQuoted = "\"" + key + "\""
+            let fullQuotedTokens = tokenizer.encode(fullQuoted)
+            
+            // Pattern 2: "\"key" - key with opening quote
+            let openQuoted = "\"" + key
+            let openQuotedTokens = tokenizer.encode(openQuoted)
+            
+            // Pattern 3: just the key
+            let bareTokens = tokenizer.encode(key)
+            
+            print("🔑 [TokenTrieBuilder] Key '\(key)':")
+            print("   Full quoted (\"\(key)\"): \(fullQuotedTokens)")
+            print("   Open quoted (\"key): \(openQuotedTokens)")
+            print("   Bare (key): \(bareTokens)")
+            
+            // Check if it's a single-token key
+            if fullQuotedTokens.count == 1 {
+                // Complete key with quotes is a single token
+                trie.singleTokenMap[fullQuotedTokens[0]] = key
+                print("   ✨ Single-token key detected: token \(fullQuotedTokens[0]) -> '\(key)'")
+            } else if openQuotedTokens.count > 0 {
+                // Use the open-quoted version for multi-token keys
+                trie.insert(tokenIDs: openQuotedTokens, keyName: key)
+                print("   📝 Multi-token key: \(openQuotedTokens)")
+            } else {
+                // Fallback to bare tokens
+                trie.insert(tokenIDs: bareTokens, keyName: key)
+                print("   📝 Fallback to bare tokens: \(bareTokens)")
+            }
         }
         
-        print("✅ [TokenTrieBuilder] Trie built with \(uniqueKeys.count) keys")
+        print("✅ [TokenTrieBuilder] Trie built with \(uniqueKeys.count) keys, \(trie.singleTokenMap.count) single-token")
         return trie
     }
     

@@ -1,18 +1,15 @@
 import Foundation
 import MLXLMCommon
+import MLX
 
 /// GenerationOrchestrator coordinates the generation process across multiple layers.
 /// It handles request processing, parameter conversion, retry logic, and response formatting.
 /// This is the high-level orchestration layer that ties together execution and ADAPT.
 actor GenerationOrchestrator {
     
-    // MARK: - Properties
-    
     private let executor: MLXExecutor
     private let adaptEngine: ADAPTEngine
     private let maxRetries: Int
-    
-    // MARK: - Errors
     
     private enum OrchestratorError: Error {
         case validationFailed
@@ -21,8 +18,6 @@ actor GenerationOrchestrator {
         case schemaViolations
         case maxRetriesExceeded
     }
-    
-    // MARK: - Initialization
     
     /// Initialize with executor and ADAPT engine
     /// - Parameters:
@@ -39,18 +34,17 @@ actor GenerationOrchestrator {
         self.maxRetries = maxRetries
     }
     
-    // MARK: - Generation Methods
-    
     /// Generate a response for the given request
     /// - Parameter request: The chat request
     /// - Returns: The chat response
     func generate(_ request: ChatRequest) async throws -> ChatResponse {
         let prompt = request.prompt
+        Logger.info("[GenerationOrchestrator] Processing prompt with schema: \(request.schema != nil)")
+        if request.schema != nil {
+            Logger.info("[GenerationOrchestrator] Schema keys: \(request.schema!.objectKeys)")
+        }
         
-        // Convert parameters if needed
         let sampling = convertParameters(request)
-        
-        // Attempt generation with retry logic
         var lastError: Error?
         var attempts = 0
         
@@ -60,8 +54,6 @@ actor GenerationOrchestrator {
             do {
                 let text: String
                 
-                // Choose generation method based on schema presence
-                // Prefer hierarchical schema if available
                 if let schemaNode = request.schema {
                     text = try await adaptEngine.generateWithSchema(
                         executor: executor,
@@ -70,7 +62,6 @@ actor GenerationOrchestrator {
                         parameters: sampling
                     )
                 } else {
-                    // Direct execution without constraints
                     let genParams = GenerateParameters(
                         maxTokens: sampling.maxTokens ?? 1024,
                         temperature: Float(sampling.temperature ?? 0.7),
@@ -82,22 +73,20 @@ actor GenerationOrchestrator {
                     )
                 }
                 
-                // Post-generation validation if needed
                 if case .jsonSchema = request.responseFormat {
                     let isValid: Bool
                     if let schemaNode = request.schema {
                         isValid = JSONValidator.validate(text: text, schema: schemaNode)
                     } else {
-                        isValid = true  // No schema to validate against
+                        isValid = true
                     }
                     
                     if !isValid {
                         lastError = OrchestratorError.validationFailed
-                        continue // Retry
+                        continue
                     }
                 }
                 
-                // Success - create response
                 let choice = ChatChoice(content: text, finishReason: "stop")
                 return ChatResponse(
                     choices: [choice],
@@ -106,17 +95,17 @@ actor GenerationOrchestrator {
                 )
                 
             } catch {
+                Stream().synchronize()
+                
                 lastError = error
                 Logger.warning("[GenerationOrchestrator] Attempt \(attempts) failed: \(error)")
                 
-                // Don't retry for certain errors
                 if case MLXExecutor.ExecutorError.noModelSet = error {
                     throw error
                 }
             }
         }
         
-        // All retries exhausted
         throw lastError ?? OrchestratorError.maxRetriesExceeded
     }
     
@@ -124,15 +113,17 @@ actor GenerationOrchestrator {
     /// - Parameter request: The chat request
     /// - Returns: Stream of chat chunks
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
-        
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    try Task.checkCancellation()
+                    
                     let prompt = request.prompt
                     let sampling = convertParameters(request)
                     
                     if let schemaNode = request.schema {
-                        // Stream with hierarchical ADAPT constraints
+                        try Task.checkCancellation()
+                        
                         let stream = await adaptEngine.streamWithSchema(
                             executor: executor,
                             prompt: prompt,
@@ -140,13 +131,14 @@ actor GenerationOrchestrator {
                             parameters: sampling
                         )
                         
-                        // Process stream (validation handled by ADAPT)
                         for try await chunk in stream {
+                            try Task.checkCancellation()
                             let delta = ChatDelta(deltaText: chunk, finishReason: nil)
                             continuation.yield(ChatChunk(deltas: [delta]))
                         }
                     } else {
-                        // Direct streaming without constraints
+                        try Task.checkCancellation()
+                        
                         let genParams = GenerateParameters(
                             maxTokens: sampling.maxTokens ?? 1024,
                             temperature: Float(sampling.temperature ?? 0.7),
@@ -159,45 +151,45 @@ actor GenerationOrchestrator {
                         )
                         
                         for try await chunk in stream {
+                            try Task.checkCancellation()
                             continuation.yield(ChatChunk(deltas: [.init(deltaText: chunk, finishReason: nil)]))
                         }
                     }
                     
-                    // Send final chunk
+                    try Task.checkCancellation()
                     continuation.yield(ChatChunk(deltas: [.init(deltaText: nil, finishReason: "stop")]))
                     continuation.finish()
                     
+                } catch is CancellationError {
+                    Stream().synchronize()
+                    continuation.finish(throwing: CancellationError())
                 } catch {
+                    Stream().synchronize()
                     continuation.finish(throwing: error)
                 }
             }
             
-            continuation.onTermination = { _ in
+            continuation.onTermination = { @Sendable _ in
                 task.cancel()
             }
         }
     }
     
-    // MARK: - Private Methods
-    
     private func convertParameters(_ request: ChatRequest) -> SamplingParameters {
         if let p = request.parameters {
-            // Convert GenerateParameters to SamplingParameters
             return SamplingParameters(
                 temperature: Double(p.temperature),
                 topP: Double(p.topP),
-                topK: nil,  // GenerateParameters doesn't have topK
+                topK: nil,
                 maxTokens: p.maxTokens,
                 stop: nil,
-                seed: nil   // GenerateParameters doesn't have seed
+                seed: nil
             )
         } else {
             return request.sampling
         }
     }
 }
-
-// MARK: - Convenience Methods
 
 extension GenerationOrchestrator {
     
@@ -228,8 +220,6 @@ extension GenerationOrchestrator {
         )
     }
 }
-
-// MARK: - Supporting Types
 
 public struct OrchestratorMetrics: Sendable {
     public let modelID: String?

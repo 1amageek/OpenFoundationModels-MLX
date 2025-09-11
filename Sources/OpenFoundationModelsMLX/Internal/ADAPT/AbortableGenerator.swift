@@ -28,7 +28,7 @@ final class AbortableGenerator: Sendable {
         baseStream: AsyncStream<T>
     ) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
-            Task { @Sendable in
+            let task = Task { @Sendable in
                 var tokenCount = 0
                 var localAbortedAt: Int? = nil
                 
@@ -63,6 +63,10 @@ final class AbortableGenerator: Sendable {
                     continuation.finish(throwing: error)
                 }
             }
+            
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
         }
     }
     
@@ -71,7 +75,7 @@ final class AbortableGenerator: Sendable {
         baseStream: AsyncThrowingStream<T, Error>
     ) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
-            Task { @Sendable in
+            let task = Task { @Sendable in
                 var tokenCount = 0
                 var localAbortedAt: Int? = nil
                 
@@ -106,6 +110,10 @@ final class AbortableGenerator: Sendable {
                     continuation.finish(throwing: error)
                 }
             }
+            
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
         }
     }
     
@@ -115,12 +123,15 @@ final class AbortableGenerator: Sendable {
         baseStream: AsyncThrowingStream<T, Error>
     ) -> AsyncThrowingStream<(output: T, tokenCount: Int), Error> where T: Sendable {
         AsyncThrowingStream { continuation in
-            Task { @Sendable in
+            let task = Task { @Sendable in
                 var tokenCount = 0
                 var localAbortedAt: Int? = nil
                 
                 do {
                     for try await output in baseStream {
+                        // Check for task cancellation
+                        try Task.checkCancellation()
+                        
                         // Check for any errors (not just fatal)
                         if self.processor.hasError() {
                             let error = self.processor.getLastError()!
@@ -149,6 +160,10 @@ final class AbortableGenerator: Sendable {
                     }
                     continuation.finish(throwing: error)
                 }
+            }
+            
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
             }
         }
     }

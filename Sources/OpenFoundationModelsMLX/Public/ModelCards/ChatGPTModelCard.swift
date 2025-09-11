@@ -49,8 +49,8 @@ public struct ChatGPTModelCard: ModelCard {
             
             "<|end|>"
             
-            // Developer message (tools and system instructions)
-            if hasTools || ext.systemText != nil {
+            // Developer message (tools, schema, and system instructions)
+            if hasTools || ext.systemText != nil || ext.schemaJSON != nil {
                 "\n<|start|>developer<|message|>"
                 
                 // Tool definitions
@@ -67,6 +67,15 @@ public struct ChatGPTModelCard: ModelCard {
                         ") => any;\n"
                     }
                     "} // namespace functions\n"
+                }
+                
+                // Response schema
+                if let schemaJSON = ext.schemaJSON {
+                    "\n# Response Schema\n\n"
+                    "Generate a JSON response conforming to this schema:\n"
+                    "```json\n"
+                    "\(schemaJSON)\n"
+                    "```\n"
                 }
                 
                 // System instructions

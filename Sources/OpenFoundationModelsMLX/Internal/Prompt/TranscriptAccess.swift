@@ -69,7 +69,10 @@ enum TranscriptAccess {
     private static func schemaJSONString(from responseFormat: Transcript.ResponseFormat?) -> String? {
         guard let responseFormat = responseFormat else { return nil }
         
-        // Try to extract schema via JSON encoding/decoding approach
+        // ResponseFormat contains a GenerationSchema which is Codable
+        // We need to extract the schema and convert it to JSON string
+        // Since we can't directly access the schema property (it's internal),
+        // we encode the ResponseFormat and extract the schema from JSON
         do {
             // Create a temporary transcript with the response format
             let tempPrompt = Transcript.Prompt(
@@ -78,8 +81,10 @@ enum TranscriptAccess {
             )
             let tempTranscript = Transcript(entries: [.prompt(tempPrompt)])
             
-            // Encode to JSON and extract schema
-            let jsonData = try JSONEncoder().encode(tempTranscript)
+            // Encode to JSON with pretty printing
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let jsonData = try encoder.encode(tempTranscript)
             let jsonObject = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
             
             if let entries = jsonObject?["entries"] as? [[String: Any]],
@@ -87,8 +92,11 @@ enum TranscriptAccess {
                let responseFormatDict = firstEntry["responseFormat"] as? [String: Any],
                let schemaDict = responseFormatDict["schema"] as? [String: Any] {
                 
-                // Convert schema back to JSON string
-                let schemaData = try JSONSerialization.data(withJSONObject: schemaDict)
+                // Convert schema back to JSON string with pretty printing
+                let schemaData = try JSONSerialization.data(
+                    withJSONObject: schemaDict,
+                    options: [.prettyPrinted, .sortedKeys]
+                )
                 return String(data: schemaData, encoding: .utf8)
             }
         } catch {

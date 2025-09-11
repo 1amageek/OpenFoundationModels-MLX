@@ -30,10 +30,23 @@ public struct LlamaModelCard: ModelCard {
             "<s>[INST] "
             
             // System message
-            if let system = ext.systemText {
+            if ext.systemText != nil || ext.schemaJSON != nil {
                 "<<SYS>>\n"
-                system
-                "\nCurrent date: \(currentDate)"
+                if let system = ext.systemText {
+                    system
+                    "\n"
+                }
+                "Current date: \(currentDate)"
+                
+                // Response schema
+                if let schemaJSON = ext.schemaJSON {
+                    "\n\nResponse Format:\n"
+                    "You must generate a JSON response conforming to this JSONSchema:\n"
+                    "```json\n"
+                    "\(schemaJSON)\n"
+                    "```"
+                }
+                
                 "\n<</SYS>>\n\n"
             }
             

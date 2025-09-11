@@ -4,19 +4,15 @@ import MLXLLM
 import Hub
 
 /// Model loader that handles downloading and loading models with progress reporting.
-/// This class is completely independent from the inference layer (MLXLanguageModel).
 public final class ModelLoader {
-    
     
     private let hubApi: HubApi
     private var modelCache: [String: ModelContainer] = [:]
     private let cacheQueue = DispatchQueue(label: "com.openFoundationModels.modelLoader.cache")
     
-    
     public init(hubApi: HubApi = HubApi()) {
         self.hubApi = hubApi
     }
-    
     
     /// Load a model with optional progress reporting
     public func loadModel(

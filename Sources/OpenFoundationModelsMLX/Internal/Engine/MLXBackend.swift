@@ -1,8 +1,6 @@
 import Foundation
 import MLXLMCommon
 
-/// MLXBackend V2 - Simplified facade that delegates to the new architecture.
-/// This maintains backward compatibility while using the new separated layers.
 public actor MLXBackend {
     
     
@@ -53,7 +51,6 @@ public actor MLXBackend {
     }
     
     
-    // Orchestrator経由のメソッド（MLXChatEngineが使用）
     func orchestratedGenerate(
         prompt: String,
         sampling: SamplingParameters,
@@ -69,7 +66,6 @@ public actor MLXBackend {
         if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
             responseFormat = .jsonSchema(schemaJSON: schemaJSON)
         } else if schema != nil {
-            // schemaNodeはあるがJSONがない場合は、スキーマから生成したダミーJSONを使用
             responseFormat = .jsonSchema(schemaJSON: "{}")
         } else {
             responseFormat = .text
@@ -89,7 +85,6 @@ public actor MLXBackend {
     }
     
     
-    // Orchestrator経由のストリーミング（MLXChatEngineが使用）
     func orchestratedStream(
         prompt: String,
         sampling: SamplingParameters,
@@ -97,37 +92,42 @@ public actor MLXBackend {
         schemaJSON: String? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
-                guard await hasModel() else {
-                    continuation.finish(throwing: MLXBackendError.noModelSet)
-                    return
-                }
-                
-                let modelID = await currentModel() ?? "unknown"
-                let responseFormat: ResponseFormatSpec
-                if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
-                    responseFormat = .jsonSchema(schemaJSON: schemaJSON)
-                } else if schema != nil {
-                    // schemaNodeはあるがJSONがない場合は、スキーマから生成したダミーJSONを使用
-                    responseFormat = .jsonSchema(schemaJSON: "{}")
-                } else {
-                    responseFormat = .text
-                }
-                
-                let req = ChatRequest(
-                    modelID: modelID,
-                    prompt: prompt,
-                    responseFormat: responseFormat,
-                    sampling: sampling,
-                    schema: schema,
-                    parameters: nil
-                )
-                
-                let stream = await orchestrator.stream(req)
-                
+            let task = Task {
                 do {
+                    try Task.checkCancellation()
+                    
+                    guard await hasModel() else {
+                        continuation.finish(throwing: MLXBackendError.noModelSet)
+                        return
+                    }
+                    
+                    try Task.checkCancellation()
+                    
+                    let modelID = await currentModel() ?? "unknown"
+                    let responseFormat: ResponseFormatSpec
+                    if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
+                        responseFormat = .jsonSchema(schemaJSON: schemaJSON)
+                    } else if schema != nil {
+                                responseFormat = .jsonSchema(schemaJSON: "{}")
+                    } else {
+                        responseFormat = .text
+                    }
+                    
+                    let req = ChatRequest(
+                        modelID: modelID,
+                        prompt: prompt,
+                        responseFormat: responseFormat,
+                        sampling: sampling,
+                        schema: schema,
+                        parameters: nil
+                    )
+                    
+                    try Task.checkCancellation()
+                    
+                    let stream = await orchestrator.stream(req)
+                    
                     for try await chunk in stream {
-                        // Extract text from ChatChunk
+                        try Task.checkCancellation()
                         for delta in chunk.deltas {
                             if let text = delta.deltaText {
                                 continuation.yield(text)
@@ -135,9 +135,15 @@ public actor MLXBackend {
                         }
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
             }
         }
     }

@@ -19,7 +19,7 @@ struct JSONStateMachineTests {
         machine.processCharacter("{")
         
         if case .inObject(let phase) = machine.phase {
-            #expect(phase == .expectKeyFirstQuote)
+            #expect(phase == .expectKeyOrEnd)
         } else {
             Issue.record("Expected inObject phase")
         }

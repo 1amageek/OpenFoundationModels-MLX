@@ -43,9 +43,9 @@ class HardMaskConstraintTest: XCTestCase {
         
         // 2. Create processor with schema node
         let mockTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: schemaNode, tokenizer: mockTokenizer)
+        let processor = DPDAKeyTrieLogitProcessor(schema: schemaNode, tokenizer: mockTokenizer)
         
-        print("✅ TokenTrieLogitProcessor created")
+        print("✅ DPDAKeyTrieLogitProcessor created")
         
         // 3. Simulate the generation pipeline step by step
         
@@ -128,7 +128,7 @@ class HardMaskConstraintTest: XCTestCase {
         
         let schemaNode = SchemaBuilder.fromJSONSchema(schemaDict)
         let mockTokenizer = MockSwiftTokenizer()
-        let processor = TokenTrieLogitProcessor(schema: schemaNode, tokenizer: mockTokenizer)
+        let processor = DPDAKeyTrieLogitProcessor(schema: schemaNode, tokenizer: mockTokenizer)
         
         let logits = MLX.ones([1, 1000]) * 5.0
         

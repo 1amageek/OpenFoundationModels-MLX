@@ -27,10 +27,23 @@ public struct ChatMLModelCard: ModelCard {
         
         return Prompt {
             // System message
-            if let system = ext.systemText {
+            if ext.systemText != nil || ext.schemaJSON != nil {
                 "<|im_start|>system\n"
-                system
-                "\nCurrent date: \(currentDate)"
+                if let system = ext.systemText {
+                    system
+                    "\n"
+                }
+                "Current date: \(currentDate)"
+                
+                // Response schema
+                if let schemaJSON = ext.schemaJSON {
+                    "\n\nResponse Format:\n"
+                    "Generate a JSON response conforming to this schema:\n"
+                    "```json\n"
+                    "\(schemaJSON)\n"
+                    "```"
+                }
+                
                 "<|im_end|>\n"
             }
             

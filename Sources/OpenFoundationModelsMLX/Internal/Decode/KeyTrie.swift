@@ -1,6 +1,6 @@
 import Foundation
 
-// Normalized key trie for fast prefix checks (character-level; tokenizer連携がない環境でも動作)。
+// Normalized key trie for fast prefix checks (character-level)
 struct KeyTrie: Sendable {
     // Note: Node is @unchecked Sendable because children are mutable during construction,
     // but immutable after the trie is built. This is safe as long as the trie is not
@@ -20,7 +20,6 @@ struct KeyTrie: Sendable {
         }
     }
 
-    // nk: normalized prefix gathered so far
     func hasPrefix(_ nk: String) -> Bool {
         var node = root
         for ch in nk {

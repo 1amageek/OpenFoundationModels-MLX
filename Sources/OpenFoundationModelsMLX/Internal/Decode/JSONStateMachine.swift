@@ -1,8 +1,6 @@
 import Foundation
 import Synchronization
 
-/// Simple JSON state machine for tracking position in JSON structure
-/// Thread-safe implementation with Mutex for better performance
 public final class JSONStateMachine: Sendable {
     
     public enum Phase: Sendable, Equatable {
@@ -17,8 +15,8 @@ public final class JSONStateMachine: Sendable {
     }
     
     public enum ObjectPhase: Sendable, Equatable {
-        case expectKeyOrEnd      // After { - allows " or }
-        case expectKey           // After , - only allows "
+        case expectKeyOrEnd
+        case expectKey
         case expectColon
         case expectValueStart
         case afterValue
@@ -52,9 +50,9 @@ public final class JSONStateMachine: Sendable {
     }
     
     public enum LiteralPhase: Sendable, Equatable {
-        case t1, t2, t3  // 't', 'tr', 'tru'
-        case f1, f2, f3, f4  // 'f', 'fa', 'fal', 'fals'
-        case n1, n2, n3  // 'n', 'nu', 'nul'
+        case t1, t2, t3
+        case f1, f2, f3, f4
+        case n1, n2, n3
         case done
     }
     
@@ -62,7 +60,6 @@ public final class JSONStateMachine: Sendable {
         let isObject: Bool
     }
     
-    // State protected by Mutex
     private struct State: Sendable {
         var phase: Phase = .root
         var stack: [Frame] = []
@@ -71,7 +68,6 @@ public final class JSONStateMachine: Sendable {
     
     private let state = Mutex(State())
     
-    // Public accessors
     public var phase: Phase {
         state.withLock { $0.phase }
     }
@@ -106,44 +102,31 @@ public final class JSONStateMachine: Sendable {
         state.withLock { state in
             let oldPhase = state.phase
             processCharacterInternal(char, &state)
-            if oldPhase != state.phase {
-                print("📊 ADAPT: Phase transition: \(oldPhase) → \(state.phase)")
-            }
         }
     }
     
     private func processCharacterInternal(_ char: Character, _ state: inout State) {
-        // Simplified state transitions
         switch state.phase {
         case .root:
             if char == "{" {
                 state.phase = .inObject(.expectKeyOrEnd)
                 state.depth += 1
                 state.stack.append(Frame(isObject: true))
-                print("📊 ADAPT: Context stack: push object (depth: \(state.depth))")
             } else if char == "[" {
                 state.phase = .inArray(.expectValue)
                 state.depth += 1
                 state.stack.append(Frame(isObject: false))
-                print("📊 ADAPT: Context stack: push array (depth: \(state.depth))")
             } else if char == "\"" {
-                // Root-level string
                 state.phase = .inString(.body(kind: .value, escaped: false))
             } else if char.isWholeNumber || char == "-" {
-                // Root-level number
                 state.phase = .inNumber(char == "0" ? .intZero : (char == "-" ? .intStart : .intNonZero))
             } else if char == "t" {
-                // Root-level true
                 state.phase = .inLiteral(.t1)
             } else if char == "f" {
-                // Root-level false
                 state.phase = .inLiteral(.f1)
             } else if char == "n" {
-                // Root-level null
                 state.phase = .inLiteral(.n1)
             } else if !char.isWhitespace {
-                // Invalid character at root
-                print("📊 ADAPT: Error detected at root with character: '\(char)'")
                 state.phase = .error
             }
             
@@ -153,11 +136,9 @@ public final class JSONStateMachine: Sendable {
                 if char == "\"" {
                     state.phase = .inString(.body(kind: .key, escaped: false))
                 } else if char == "}" {
-                    // Empty object is allowed after {
                     state.depth -= 1
                     _ = state.stack.popLast()
-                    print("📊 ADAPT: Context stack: pop object (depth: \(state.depth))")
-                    if state.stack.isEmpty {
+                        if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {
                         state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
@@ -168,8 +149,6 @@ public final class JSONStateMachine: Sendable {
                 if char == "\"" {
                     state.phase = .inString(.body(kind: .key, escaped: false))
                 } else if !char.isWhitespace {
-                    // } is NOT allowed after comma - this would be a trailing comma
-                    print("📊 ADAPT: Error - trailing comma detected (got '\(char)' after comma)")
                     state.phase = .error
                 }
                 
@@ -205,8 +184,7 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "}" {
                     state.depth -= 1
                     _ = state.stack.popLast()
-                    print("📊 ADAPT: Context stack: pop object (depth: \(state.depth))")
-                    if state.stack.isEmpty {
+                        if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {
                         state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
@@ -222,11 +200,9 @@ public final class JSONStateMachine: Sendable {
                 } else if char == "\\" {
                     state.phase = .inString(.body(kind: kind, escaped: true))
                 } else if char == "\"" {
-                    // String ended
                     if kind == .key {
                         state.phase = .inObject(.expectColon)
                     } else if state.stack.isEmpty {
-                        // Root-level string completed
                         state.phase = .done
                     } else if let frame = state.stack.last {
                         state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
@@ -241,7 +217,6 @@ public final class JSONStateMachine: Sendable {
             switch arrPhase {
             case .expectValue:
                 if char == "]" {
-                    // Empty array or end after previous value
                     state.depth -= 1
                     _ = state.stack.popLast()
                     if state.stack.isEmpty {
@@ -284,23 +259,18 @@ public final class JSONStateMachine: Sendable {
             }
             
         case .inNumber(let numPhase):
-            // Handle number state transitions
             let isValueTerminator = (char == ",") || (char == "]") || (char == "}")
             
             if isValueTerminator {
-                // Number ended, return to enclosing context
                 if state.stack.isEmpty {
-                    // Root-level number completed
                     state.phase = .done
                 } else if let frame = state.stack.last {
                     state.phase = frame.isObject ? .inObject(.afterValue) : .inArray(.afterValue)
-                    // Re-process the terminator in the new phase
                     processCharacterInternal(char, &state)
                 }
                 return
             }
             
-            // Continue number parsing
             switch numPhase {
             case .intStart:
                 if char == "0" {
@@ -316,7 +286,6 @@ public final class JSONStateMachine: Sendable {
                 }
             case .intNonZero:
                 if char.isWholeNumber {
-                    // Stay in intNonZero
                     break
                 } else if char == "." {
                     state.phase = .inNumber(.fracStart)
@@ -343,19 +312,16 @@ public final class JSONStateMachine: Sendable {
                 }
             case .exp:
                 if !char.isWholeNumber {
-                    // Invalid character in exponent
                     state.phase = .error
                 }
             }
             
         case .inLiteral(let litPhase):
-            // Handle literal state transitions (true, false, null)
             switch litPhase {
             case .t1: state.phase = char == "r" ? .inLiteral(.t2) : .error
             case .t2: state.phase = char == "u" ? .inLiteral(.t3) : .error
             case .t3:
                 if char == "e" {
-                    // "true" complete
                     if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {
@@ -369,7 +335,6 @@ public final class JSONStateMachine: Sendable {
             case .f3: state.phase = char == "s" ? .inLiteral(.f4) : .error
             case .f4:
                 if char == "e" {
-                    // "false" complete
                     if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {
@@ -382,7 +347,6 @@ public final class JSONStateMachine: Sendable {
             case .n2: state.phase = char == "l" ? .inLiteral(.n3) : .error
             case .n3:
                 if char == "l" {
-                    // "null" complete
                     if state.stack.isEmpty {
                         state.phase = .done
                     } else if let frame = state.stack.last {

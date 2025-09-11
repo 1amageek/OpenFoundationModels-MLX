@@ -18,11 +18,9 @@ final class MockLogitProcessor: ErrorCheckable, @unchecked Sendable {
     private var lastError: JSONGenerationError?
     
     init() {
-        // Simple initialization
     }
     
     func prompt(_ prompt: MLXArray) {
-        // Reset state for new prompt
         currentTokenCount = 0
         clearError()
     }
@@ -35,13 +33,9 @@ final class MockLogitProcessor: ErrorCheckable, @unchecked Sendable {
             shouldTriggerFatalError = true
         }
         
-        // Process the logits before setting error state
-        // This ensures the error is available for the next check
         let result = logits
-        
-        // Set error state based on test configuration
         if shouldTriggerFatalError {
-            mockError = mockError ?? .noValidTokens(partialKey: "test", position: currentTokenCount)
+            mockError = mockError ?? .invalidTokenSelected(token: -1, partialKey: "test", expectedTokens: [])
             lastError = mockError
         } else if shouldTriggerNonFatalError {
             mockError = mockError ?? .emptyConstraints
@@ -52,7 +46,6 @@ final class MockLogitProcessor: ErrorCheckable, @unchecked Sendable {
     }
     
     func didSample(token: MLXArray) {
-        // Track sampled tokens if needed
     }
     
     func hasError() -> Bool {
@@ -62,9 +55,9 @@ final class MockLogitProcessor: ErrorCheckable, @unchecked Sendable {
     func hasFatalError() -> Bool {
         guard let error = lastError else { return false }
         switch error {
-        case .noValidTokens, .invalidTokenSelected:
+        case .invalidTokenSelected:
             return true
-        case .emptyConstraints, .schemaViolation:
+        case .emptyConstraints, .schemaViolation, .unexpectedJSONStructure, .abortedDueToError:
             return false
         }
     }
@@ -101,7 +94,6 @@ final class MockTokenizer: TokenizerAdapter {
     private let reverseTokens: [Int32: String]
     
     init() {
-        // Build reverse mapping
         var reverse = [Int32: String]()
         for (token, id) in jsonTokens {
             reverse[id] = token
@@ -110,17 +102,14 @@ final class MockTokenizer: TokenizerAdapter {
     }
     
     func encode(_ text: String) -> [Int32] {
-        // Check for JSON tokens first
         if let jsonToken = jsonTokens[text] {
             return [jsonToken]
         }
         
-        // Simple mock encoding: each character gets a token ID
         return text.unicodeScalars.map { Int32($0.value % 1000) }
     }
     
     func decode(_ ids: [Int32]) -> String {
-        // Check for JSON tokens first
         var result = ""
         for id in ids {
             if let jsonToken = reverseTokens[id] {
@@ -133,7 +122,6 @@ final class MockTokenizer: TokenizerAdapter {
     }
     
     func decodeToken(_ id: Int32) -> String {
-        // Check for JSON tokens first
         if let jsonToken = reverseTokens[id] {
             return jsonToken
         }
@@ -161,8 +149,6 @@ final class MockTokenizer: TokenizerAdapter {
     }
     
     func fingerprint() -> String {
-        // MockTokenizer用の固有識別子
-        // テスト間の独立性を保証
         return "MockTokenizer-v1.0-vocab\(getVocabSize() ?? 0)"
     }
 }
@@ -199,7 +185,6 @@ final class MockSwiftTokenizer: Tokenizer, @unchecked Sendable {
         self.eosTokenID = 999
         self.unknownTokenID = 0
         
-        // Build reverse mapping
         var reverse = [Int: String]()
         for (token, id) in jsonTokens {
             reverse[id] = token
@@ -208,12 +193,10 @@ final class MockSwiftTokenizer: Tokenizer, @unchecked Sendable {
     }
     
     func tokenize(text: String) -> [String] {
-        // More realistic tokenization - handle JSON tokens as single units
         var tokens: [String] = []
         var i = text.startIndex
         
         while i < text.endIndex {
-            // Check for multi-character JSON tokens
             var matched = false
             for (token, _) in jsonTokens {
                 if text[i...].hasPrefix(token) {
@@ -239,7 +222,6 @@ final class MockSwiftTokenizer: Tokenizer, @unchecked Sendable {
             if let id = jsonTokens[token] {
                 return id
             }
-            // Simple fallback for unknown tokens
             return Int(token.first?.unicodeScalars.first?.value ?? 0) % 1000
         }
     }
@@ -268,7 +250,6 @@ final class MockSwiftTokenizer: Tokenizer, @unchecked Sendable {
     func decode(tokens: [Int], skipSpecialTokens: Bool) -> String {
         var result = ""
         for token in tokens {
-            // Skip special tokens if requested
             if skipSpecialTokens {
                 if token == bosTokenID || token == eosTokenID || token == unknownTokenID {
                     continue
@@ -279,7 +260,6 @@ final class MockSwiftTokenizer: Tokenizer, @unchecked Sendable {
             if let jsonToken = reverseTokens[token] {
                 result += jsonToken
             } else {
-                // Fallback for unknown tokens
                 result += String(UnicodeScalar(token % 128) ?? UnicodeScalar(65))
             }
         }
@@ -287,7 +267,6 @@ final class MockSwiftTokenizer: Tokenizer, @unchecked Sendable {
     }
     
     func convertTokenToId(_ token: String) -> Int? {
-        // Simple conversion
         return token.first.map { Int($0.unicodeScalars.first?.value ?? 0) % 1000 }
     }
     

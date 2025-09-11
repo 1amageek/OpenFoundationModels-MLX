@@ -6,7 +6,9 @@ import MLXLLM
 
 public actor ADAPTEngine {
     
-    private var schemaIndexCache: LRUCache<String, SchemaTrieIndex>  // SchemaTrieIndex用LRUキャッシュ
+    // DPDAKeyTrieLogitProcessor is now the only processor
+    
+    private var schemaIndexCache: LRUCache<String, SchemaTrieIndex>
     private let maxCacheSize: Int
     
     public init(maxCacheSize: Int = 100) {
@@ -34,7 +36,28 @@ public actor ADAPTEngine {
         }
     }
     
-    /// Generate text with schema constraints using the ADAPT system
+    private func prepareSchemaIndex(
+        executor: MLXExecutor,
+        schema: SchemaNode
+    ) async throws -> (SchemaTrieIndex, MLXLLMTokenizer, String) {
+        let (adapter, fingerprint) = try await executor.withTokenizer { tokenizer in
+            let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
+            return (adapter, adapter.fingerprint())
+        }
+        
+        let cacheKey = "\(fingerprint)|\(schema.cacheKey())"
+        
+        if let cached = schemaIndexCache.get(cacheKey) {
+            Logger.debug("[ADAPT] Using cached SchemaTrieIndex for key: \(cacheKey)")
+            return (cached, adapter, cacheKey)
+        } else {
+            Logger.debug("[ADAPT] Building new SchemaTrieIndex for key: \(cacheKey)")
+            let schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
+            schemaIndexCache.set(cacheKey, value: schemaIndex)
+            return (schemaIndex, adapter, cacheKey)
+        }
+    }
+    
     func generateWithSchema(
         executor: MLXExecutor,
         prompt: String,
@@ -43,47 +66,25 @@ public actor ADAPTEngine {
     ) async throws -> String {
         Logger.debug("[ADAPT] Schema received with \(schema.objectKeys.count) keys: \(schema.objectKeys)")
         
-        // キャッシュキーを事前に生成（tokenizerに依存しない部分）
-        let schemaKey = schema.objectKeys.sorted().joined()
+        let (schemaIndex, _, _) = try await prepareSchemaIndex(executor: executor, schema: schema)
         
-        // Get tokenizer safely without nesting perform
-        let (adapter, fingerprint) = try await executor.withTokenizer { tokenizer in
-            let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
-            return (adapter, adapter.fingerprint())
-        }
-        
-        // キャッシュアクセスはクロージャの外で行う
-        let cacheKey = "\(fingerprint)|\(schemaKey)"
-        let schemaIndex: SchemaTrieIndex
-        if let cached = schemaIndexCache.get(cacheKey) {
-            Logger.debug("[ADAPT] Using cached SchemaTrieIndex for key: \(cacheKey)")
-            schemaIndex = cached
-        } else {
-            Logger.debug("[ADAPT] Building new SchemaTrieIndex for key: \(cacheKey)")
-            schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
-            schemaIndexCache.set(cacheKey, value: schemaIndex)
-        }
-        
-        // ProcessorはSchemaIndexを使って作成
         let constraintProcessor = try await executor.withTokenizer { tokenizer in
-            let processor = TokenTrieLogitProcessor(
+            Logger.debug("[ADAPT] Using DPDAKeyTrieLogitProcessor")
+            let processor = DPDAKeyTrieLogitProcessor(
                 schema: schema,
                 tokenizer: tokenizer,
-                cachedIndex: schemaIndex  // キャッシュされたIndexを渡す
+                cachedIndex: schemaIndex
             )
             processor.clearError()
-            Logger.debug("[ADAPT] TokenTrieLogitProcessor created successfully")
             return processor
         }
         
-        // Convert sampling parameters to generation parameters
         let genParams = GenerateParameters(
             maxTokens: parameters.maxTokens ?? 1024,
             temperature: Float(parameters.temperature ?? 0.7),
             topP: Float(parameters.topP ?? 1.0)
         )
         
-        // Execute with constraints - no nested perform
         let result = try await executor.execute(
             prompt: prompt,
             parameters: genParams,
@@ -101,7 +102,6 @@ public actor ADAPTEngine {
         return result
     }
     
-    /// Stream text generation with schema constraints
     func streamWithSchema(
         executor: MLXExecutor,
         prompt: String,
@@ -109,81 +109,73 @@ public actor ADAPTEngine {
         parameters: SamplingParameters
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
-                    // キャッシュキーを事前に生成（tokenizerに依存しない部分）
-                    let schemaKey = schema.objectKeys.sorted().joined()
+                    try Task.checkCancellation()
                     
-                    // Get tokenizer safely without nesting perform
-                    let (adapter, fingerprint) = try await executor.withTokenizer { tokenizer in
-                        let adapter = MLXLLMTokenizer(tokenizer: tokenizer)
-                        return (adapter, adapter.fingerprint())
-                    }
+                    let (schemaIndex, _, _) = try await self.prepareSchemaIndex(executor: executor, schema: schema)
                     
-                    // キャッシュアクセスはクロージャの外で行う
-                    let cacheKey = "\(fingerprint)|\(schemaKey)"
-                    let schemaIndex: SchemaTrieIndex
-                    if let cached = await self.schemaIndexCache.get(cacheKey) {
-                        Logger.debug("[ADAPT] [Stream] Using cached SchemaTrieIndex for key: \(cacheKey)")
-                        schemaIndex = cached
-                    } else {
-                        Logger.debug("[ADAPT] [Stream] Building new SchemaTrieIndex for key: \(cacheKey)")
-                        schemaIndex = SchemaTrieIndex(root: schema, tokenizer: adapter)
-                        await self.schemaIndexCache.set(cacheKey, value: schemaIndex)
-                    }
+                    try Task.checkCancellation()
                     
-                    // ProcessorはSchemaIndexを使って作成
                     let constraintProcessor = try await executor.withTokenizer { tokenizer in
-                        let processor = TokenTrieLogitProcessor(
+                        Logger.debug("[ADAPT] [Stream] Using DPDAKeyTrieLogitProcessor")
+                        let processor = DPDAKeyTrieLogitProcessor(
                             schema: schema,
                             tokenizer: tokenizer,
-                            cachedIndex: schemaIndex  // キャッシュされたIndexを渡す
+                            cachedIndex: schemaIndex
                         )
                         processor.clearError()
-                        Logger.debug("[ADAPT] [Stream] TokenTrieLogitProcessor created successfully")
                         return processor
                     }
                     
-                    // Convert parameters
+                    try Task.checkCancellation()
+                    
                     let genParams = GenerateParameters(
                         maxTokens: parameters.maxTokens ?? 1024,
                         temperature: Float(parameters.temperature ?? 0.7),
                         topP: Float(parameters.topP ?? 1.0)
                     )
                     
-                    // Get base stream from executor - no nested perform
                     let baseStream = await executor.executeStream(
                         prompt: prompt,
                         parameters: genParams,
                         logitProcessor: constraintProcessor
                     )
                     
-                    // Process stream with ADAPT constraints
-                    // Note: TokenTrieLogitProcessor already handles JSON state tracking and validation
+                    defer {
+                        constraintProcessor.clearError()
+                    }
+                    
                     for try await chunk in baseStream {
-                        // Simply pass through - constraint processor ensures valid JSON
+                        try Task.checkCancellation()
                         continuation.yield(chunk)
                     }
                     
                     continuation.finish()
+                } catch is CancellationError {
+                    Stream().synchronize()
+                    continuation.finish(throwing: CancellationError())
                 } catch {
+                    Stream().synchronize()
                     continuation.finish(throwing: error)
                 }
+            }
+            
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
             }
         }
     }
     
-    /// Create a LogitProcessor for the given schema
     public func createLogitProcessor(
         schema: SchemaNode,
         tokenizer: Tokenizer
     ) -> LogitProcessor {
-        return TokenTrieLogitProcessor(
+        return DPDAKeyTrieLogitProcessor(
             schema: schema,
             tokenizer: tokenizer
         )
     }
-    
     
     public func clearCache() {
         schemaIndexCache.clear()
