@@ -103,6 +103,12 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 }()
             )
             
+            // Debug: Log generated content before processing
+            Logger.info("[MLXLanguageModel] Generated content:")
+            Logger.info("[MLXLanguageModel] ========== START ==========")
+            Logger.info(res)
+            Logger.info("[MLXLanguageModel] ========== END ==========")
+            
             let choice = ChatChoice(content: res, finishReason: "stop")
             let response = ChatResponse(
                 choices: [choice],

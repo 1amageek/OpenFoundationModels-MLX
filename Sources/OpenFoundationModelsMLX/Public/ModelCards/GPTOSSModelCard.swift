@@ -42,13 +42,13 @@ public struct GPTOSSModelCard: ModelCard {
                 
                 // Tool definitions
                 if hasTools {
-                    "# Tools\n\n"
-                    "## functions\n\n"
-                    "namespace functions {\n"
+                    "# Tools"
+                    "## functions"
+                    "namespace functions {"
                     
                     for tool in ext.toolDefs {
                         if let desc = tool.description {
-                            "// \(desc)\n"
+                            "// \(desc)"
                         }
                         "type \(tool.name) = (_: "
                         if let params = tool.parametersJSON {
@@ -56,15 +56,26 @@ public struct GPTOSSModelCard: ModelCard {
                         } else {
                             "{}"
                         }
-                        ") => any;\n"
+                        ") => any;"
                     }
                     
-                    "} // namespace functions\n"
+                    "} // namespace functions"
                 }
                 
                 // System instructions
                 if let system = ext.systemText {
-                    "\n# Instructions\n\n\(system)\n"
+                    "\n# Instructions\n\n\(system)"
+                }
+                
+                // Response format schema (Harmony spec)
+                if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty {
+                    "\n# Response Formats"
+                    "## response_format"
+                    "// Generate a JSON data instance that conforms to this schema."
+                    "// DO NOT copy the schema structure - create actual data values."
+                    "// Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}"
+                    "\n"
+                    schemaJSON
                 }
                 
                 "<|end|>"

@@ -41,7 +41,9 @@ public struct LlamaModelCard: ModelCard {
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
                     "\n\nResponse Format:\n"
-                    "You must generate a JSON response conforming to this JSONSchema:\n"
+                    "Generate a JSON data instance that conforms to this JSONSchema.\n"
+                    "DO NOT copy the schema structure - create actual data values.\n"
+                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}\n"
                     "```json\n"
                     "\(schemaJSON)\n"
                     "```"
@@ -148,7 +150,9 @@ public struct Llama3ModelCard: ModelCard {
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
                     "\n\nResponse Format:\n"
-                    "You must generate a JSON response conforming to this JSONSchema:\n"
+                    "Generate a JSON data instance that conforms to this JSONSchema.\n"
+                    "DO NOT copy the schema structure - create actual data values.\n"
+                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}\n"
                     "```json\n"
                     "\(schemaJSON)\n"
                     "```"

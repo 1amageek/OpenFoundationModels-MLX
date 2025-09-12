@@ -21,7 +21,7 @@ public struct ObservableLogitProcessor: LogitProcessor {
     public init(
         tokenizer: TokenizerAdapter? = nil,
         topK: Int = 10,
-        verbose: Bool = true
+        verbose: Bool = false
     ) {
         self.tokenizer = tokenizer
         self.topK = topK

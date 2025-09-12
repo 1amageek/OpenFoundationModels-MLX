@@ -30,7 +30,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         let observableProcessor = ObservableLogitProcessor(
             tokenizer: tokenizerAdapter,
             topK: 10,
-            verbose: true  // Always verbose for debugging
+            verbose: false  // Always verbose for debugging
         )
         
         // Determine mode and additional processors based on schema

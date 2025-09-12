@@ -5,34 +5,18 @@ import OpenFoundationModelsMacros
 import OpenFoundationModelsMLX
 import MLX
 
-// Simple blog post with nested author
+// Simple person profile with nested contact info
 @Generable
-struct BlogPost {
-    var title: String
-    var content: String
-    var author: Author
-    var tags: [String]
+struct PersonProfile {
+    var name: String
+    var age: Int
+    var occupation: String
+    var contact: ContactInfo
     
     @Generable
-    struct Author {
-        var name: String
+    struct ContactInfo {
         var email: String
-    }
-}
-
-// Simple order with nested items
-@Generable
-struct Order {
-    var orderId: Int
-    var customerName: String
-    var items: [OrderItem]
-    var total: Double
-    
-    @Generable
-    struct OrderItem {
-        var name: String
-        var price: Double
-        var quantity: Int
+        var phone: String?
     }
 }
 
@@ -42,7 +26,7 @@ struct GenerableBasedCLI {
         // Use lmstudio-community 8-bit version for better quality
         let modelID = "lmstudio-community/gpt-oss-20b-MLX-8bit"
         
-        print("🚀 JSON Generation Demo")
+        print("🚀 Nested Generable Validation Test")
         print("Model: \(modelID)\n")
         
         do {
@@ -59,29 +43,18 @@ struct GenerableBasedCLI {
             // Create progress object
             let progress = Progress(totalUnitCount: 100)
             
-            // Start a task to monitor progress
+            // Monitor progress
             let progressTask = Task {
                 while !Task.isCancelled && !progress.isFinished {
                     let percentage = Int(progress.fractionCompleted * 100)
-                    let completed = progress.completedUnitCount
-                    let total = progress.totalUnitCount
-                    
-                    if total > 0 {
-                        print("\rProgress: \(percentage)% (\(completed)/\(total))", terminator: "")
-                        fflush(stdout)
-                    } else {
-                        print("\rProgress: \(percentage)%", terminator: "")
-                        fflush(stdout)
-                    }
-                    
-                    try? await Task.sleep(nanoseconds: 500_000_000) // Update every 0.5 seconds
+                    print("\rProgress: \(percentage)%", terminator: "")
+                    fflush(stdout)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
                 }
             }
             
-            // Load model with progress
+            // Load model
             let container = try await loader.loadModel(modelID, progress: progress)
-            
-            // Cancel progress monitoring
             progressTask.cancel()
             
             print("\n✅ Model loaded\n")
@@ -95,55 +68,80 @@ struct GenerableBasedCLI {
             // Create session
             let session = LanguageModelSession(
                 model: languageModel,
-                instructions: "Generate realistic JSON data. Be concise and accurate."
+                instructions: "Generate realistic data for the requested profile. Be concise and accurate."
             )
             
-            // Test 1: Blog post with nested author
-            print("--- Test 1: Blog Post ---")
-            print("Generating blog post...")
+            // Test nested Generable
+            print("=== Testing Nested Generable: PersonProfile ===")
+            print("Schema: PersonProfile with nested ContactInfo")
+            print("Required fields: name, age, occupation, contact (email required, phone optional)\n")
             
-            let post = try await session.respond(
-                to: "Generate a blog post about AI technology",
-                generating: BlogPost.self
-            ).content
+            print("🔄 Generating person profile...")
             
-            print("✅ Generated Blog Post:")
-            print("  Title: \(post.title)")
-            print("  Author: \(post.author.name) (\(post.author.email))")
-            print("  Tags: \(post.tags.joined(separator: ", "))")
-            print("  Content: \(String(post.content.prefix(100)))...")
-            
-            // Test 2: Order with nested items
-            print("\n--- Test 2: Order ---")
-            print("Generating order...")
-            
-            let order = try await session.respond(
-                to: "Generate an order for electronics with 3 items",
-                generating: Order.self
-            ).content
-            
-            print("✅ Generated Order #\(order.orderId):")
-            print("  Customer: \(order.customerName)")
-            print("  Items:")
-            for item in order.items {
-                print("    - \(item.name): $\(item.price) x \(item.quantity)")
+            do {
+                let startTime = Date()
+                
+                let profile = try await session.respond(
+                    to: "Generate a profile for a software engineer working at a tech company",
+                    generating: PersonProfile.self
+                ).content
+                
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                
+                print("\n✅ Successfully generated PersonProfile in \(String(format: "%.2f", elapsedTime))s:")
+                print("┌─ Person Details")
+                print("│  Name: \(profile.name)")
+                print("│  Age: \(profile.age)")
+                print("│  Occupation: \(profile.occupation)")
+                print("└─ Contact Info (nested)")
+                print("   ├─ Email: \(profile.contact.email)")
+                if let phone = profile.contact.phone {
+                    print("   └─ Phone: \(phone)")
+                } else {
+                    print("   └─ Phone: (not provided)")
+                }
+                
+                // Encode to JSON to verify structure
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let jsonData = try encoder.encode(profile)
+                let jsonString = String(data: jsonData, encoding: .utf8) ?? ""
+                
+                print("\n📋 Generated JSON:")
+                print(jsonString)
+                
+                print("\n✨ Validation Result: PASSED")
+                print("  - Nested structure correctly generated")
+                print("  - All required fields present")
+                print("  - Optional field handled properly")
+                
+            } catch {
+                print("\n❌ Failed to generate PersonProfile")
+                print("Error: \(error)")
+                
+                if let decodingError = error as? DecodingError {
+                    switch decodingError {
+                    case .keyNotFound(let key, let context):
+                        print("  Missing key: '\(key.stringValue)'")
+                        print("  Path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .typeMismatch(let type, let context):
+                        print("  Type mismatch: expected \(type)")
+                        print("  Path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .valueNotFound(let type, let context):
+                        print("  Value not found: \(type)")
+                        print("  Path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .dataCorrupted(let context):
+                        print("  Data corrupted at: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    @unknown default:
+                        print("  Unknown decoding error")
+                    }
+                }
             }
-            print("  Total: $\(order.total)")
             
-            // Show JSON
-            print("\n--- JSON Preview ---")
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = .prettyPrinted
-            if let jsonData = try? encoder.encode(post),
-               let jsonString = String(data: jsonData, encoding: .utf8) {
-                print(String(jsonString.prefix(300)))
-                print("...")
-            }
-            
-            print("\n🎉 Tests completed!")
+            print("\n🏁 Test completed")
             
         } catch {
-            print("❌ Error: \(error)")
+            print("❌ Fatal error: \(error)")
         }
         
         Stream().synchronize()
@@ -151,7 +149,5 @@ struct GenerableBasedCLI {
 }
 
 // Make structs Encodable for JSON output
-extension BlogPost: Encodable {}
-extension BlogPost.Author: Encodable {}
-extension Order: Encodable {}
-extension Order.OrderItem: Encodable {}
+extension PersonProfile: Encodable {}
+extension PersonProfile.ContactInfo: Encodable {}
