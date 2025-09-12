@@ -2,6 +2,127 @@ import Foundation
 import MLX
 import OpenFoundationModelsMLX
 
+// Test incomplete JSON (LLM-style token-by-token generation)
+func testIncompleteJSON() {
+    print("\n=== Testing Incomplete JSON (LLM-style token-by-token) ===\n")
+    
+    // LLMが生成するような不完全なJSONのステップ
+    let incompleteJSONSteps = [
+        "{",
+        "{\n",
+        "{\n  \"",
+        "{\n  \"name",
+        "{\n  \"name\"",
+        "{\n  \"name\":",
+        "{\n  \"name\": \"",
+        "{\n  \"name\": \"John",
+        "{\n  \"name\": \"John\"",
+        "{\n  \"name\": \"John\",",
+        "{\n  \"name\": \"John\",\n  \"",
+        "{\n  \"name\": \"John\",\n  \"age",
+        "{\n  \"name\": \"John\",\n  \"age\"",
+        "{\n  \"name\": \"John\",\n  \"age\":",
+        "{\n  \"name\": \"John\",\n  \"age\": 30",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"nested",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"nested\"",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"nested\": {",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"nested\": {\n    \"",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"nested\": {\n    \"key",
+        "{\n  \"name\": \"John\",\n  \"age\": 30,\n  \"nested\": {\n    \"key\"",
+    ]
+    
+    let tokenizer = MockEnhancedTokenizer()
+    var processor = KeyDetectionLogitProcessor(
+        tokenizer: tokenizer,
+        verbose: true,
+        topK: 5,
+        showProbabilities: false  // Disable probability display for clarity
+    )
+    
+    processor.prompt(MLXArray.zeros([1]))
+    
+    for (i, json) in incompleteJSONSteps.enumerated() {
+        print("\nStep \(i + 1): Processing partial JSON:")
+        print("  Input: \(json.replacingOccurrences(of: "\n", with: "\\n"))")
+        
+        // Process the last character(s) added
+        if i > 0 {
+            let prevJSON = incompleteJSONSteps[i - 1]
+            let newChars = String(json.dropFirst(prevJSON.count))
+            
+            for char in newChars {
+                tokenizer.nextDecodeResult = String(char)
+                let mockToken = MLXArray(Int32(i * 10 + Int(char.unicodeScalars.first?.value ?? 0)))
+                processor.didSample(token: mockToken)
+            }
+        } else {
+            // Process the first character
+            tokenizer.nextDecodeResult = json
+            let mockToken = MLXArray(Int32(0))
+            processor.didSample(token: mockToken)
+        }
+        
+        // Check if key is being generated
+        print("  Is in key generation: \(processor.isGeneratingKey)")
+        print("  Current phase: \(processor.currentPhase)")
+        print("  Detected keys so far: \(processor.allDetectedKeys)")
+    }
+}
+
+// Test token-split keys (real LLM behavior)
+func testTokenSplitKeys() {
+    print("\n=== Testing Token-Split Keys (Real LLM Behavior) ===\n")
+    
+    // LLMがキーを複数トークンに分割する場合
+    let tokenSequences: [(String, [String])] = [
+        // Case 1: キーが複数トークンに分割
+        ("Key split across tokens", ["{\n  \"", "desc", "ription", "\"", ": \""]),
+        
+        // Case 2: 引用符とキーが一体化
+        ("Quote and key combined", ["{\n  ", "\"name\"", ": \""]),
+        
+        // Case 3: キーの途中で分割
+        ("Key split mid-word", ["{\n  \"", "head", "Count", "\"", ": "]),
+        
+        // Case 4: 配列内のオブジェクトのキー
+        ("Key in array object", ["[{\"", "id", "\"", ": 1, \"", "status", "\"", ": \"active\"}]"]),
+    ]
+    
+    for (caseNum, (description, tokens)) in tokenSequences.enumerated() {
+        print("\n--- Case \(caseNum + 1): \(description) ---")
+        print("Tokens: \(tokens)")
+        
+        let tokenizer = MockEnhancedTokenizer()
+        var processor = KeyDetectionLogitProcessor(
+            tokenizer: tokenizer,
+            verbose: false,  // Disable verbose for cleaner output
+            topK: 5,
+            showProbabilities: false
+        )
+        
+        processor.prompt(MLXArray.zeros([1]))
+        
+        var generatedText = ""
+        for (i, token) in tokens.enumerated() {
+            tokenizer.nextDecodeResult = token
+            let mockToken = MLXArray(Int32(i))
+            
+            print("  Token \(i): \"\(token)\"")
+            processor.didSample(token: mockToken)
+            generatedText += token
+            
+            if processor.isGeneratingKey {
+                print("    -> Currently generating key")
+            }
+        }
+        
+        print("  Generated: \(generatedText)")
+        print("  Final detected keys: \(processor.allDetectedKeys)")
+    }
+}
+
 // Test the enhanced KeyDetectionLogitProcessor
 func testEnhancedProcessor() {
     print("\n=== Testing Enhanced KeyDetectionLogitProcessor ===\n")

@@ -5,7 +5,7 @@ import MLXLMCommon
 /// LogitProcessor that detects and logs JSON key generation with probability analysis
 /// Uses JSONStateMachine to track parsing state and identify key tokens
 /// Provides detailed statistics about token selection during key generation
-public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
+public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
     
     // MARK: - Properties
     
@@ -20,6 +20,11 @@ public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
     private var detectedKeys: [String] = []
     private var nestingStack: [String] = []  // Track nested object context
     private var stepCount: Int = 0
+    private var lastProcessedText = ""  // Track last token to determine context
+    
+    // Delayed evaluation state for accurate key detection
+    private var pendingLogitInfo: LogitInfo?
+    private var wasInKeyGeneration: Bool = false
     
     // MARK: - Initialization
     
@@ -43,52 +48,61 @@ public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
     
     // MARK: - LogitProcessor Protocol
     
-    public mutating func prompt(_ prompt: MLXArray) {
+    public func prompt(_ prompt: MLXArray) {
         // Reset state for new generation
         stateMachine.reset()
         generatedText = ""
         detectedKeys = []
         nestingStack = []
         stepCount = 0
+        pendingLogitInfo = nil
+        wasInKeyGeneration = false
         
         if verbose {
-            print("\n[KeyDetection] 🔍 Starting JSON key detection with probability analysis...")
+            print("\n===== 🚀 Generation Started =====")
+            let tokens = prompt.asArray(Int32.self)
+            print("Prompt: \(tokens.count) tokens\n")
+            
             if showProbabilities {
-                print("[KeyDetection] Tracking top-\(topK) candidates with entropy")
+                print("[KeyDetection] JSON key detection enabled")
+                print("[KeyDetection] Will show enhanced analysis for key generation")
             }
         }
     }
     
     public func process(logits: MLXArray) -> MLXArray {
-        // Build logit information if probability display is enabled
-        if showProbabilities {
-            let info = buildLogitInfo(from: logits, step: stepCount + 1)
-            
-            // Display probability info if we're in key generation phase
-            if verbose && stateMachine.isInKeyGeneration {
-                displayKeyGenerationStep(info)
+        // Delayed evaluation: Show entropy for the PREVIOUS token if it was in key generation
+        if let pending = pendingLogitInfo,
+           wasInKeyGeneration,
+           showProbabilities,
+           verbose {
+            // Check if the pending token was a quote (which ends the key)
+            if let topCandidate = pending.topCandidates.first,
+               let text = topCandidate.text,
+               text == "\"" || text.contains("\"") {
+                // Skip displaying for quote tokens
+            } else {
+                displayStep(pending, isKey: true)
             }
-            
-            // Note: We'll store the info in didSample where we can mutate
         }
+        
+        // Build and store current logit info for next iteration
+        let currentInfo = buildLogitInfo(from: logits, step: stepCount + 1)
+        pendingLogitInfo = currentInfo
+        wasInKeyGeneration = stateMachine.isInKeyGeneration
         
         // This processor only observes, doesn't modify logits
         return logits
     }
     
-    public mutating func didSample(token: MLXArray) {
+    public func didSample(token: MLXArray) {
         stepCount += 1
         let tokenId = token.item(Int32.self)
         let text = tokenizer.decode([tokenId])
         
         // Track generated text
         generatedText.append(text)
-        
-        // Show selected token info if probability display is enabled
-        // Note: We can't access the logits here, so we can't show rank/probability for the selected token
-        if showProbabilities && verbose && stateMachine.isInKeyGeneration {
-            print("[KeyDetection] ✅ Selected token [\(tokenId)]: \"\(formatTokenForDisplay(text))\"")
-        }
+        lastProcessedText = text
         
         // Process each character through the state machine
         for char in text {
@@ -129,11 +143,23 @@ public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
                 printPhaseTransition(from: previousPhase, to: stateMachine.phase)
             }
         }
+        
+        // Now show the output for the actually selected token (with correct state)
+        if verbose && showProbabilities && wasInKeyGeneration {
+            // Skip if this is a quote token
+            if text == "\"" || text.contains("\"") {
+                // Don't mark quotes as key tokens
+            } else {
+                let displayText = formatTokenForDisplay(text)
+                print("✅ [\(tokenId)] → \"\(displayText)\" 🔑 KEY TOKEN")
+                print("   Output: \(String(generatedText.suffix(50)))")
+            }
+        }
     }
     
     // MARK: - Private Methods
     
-    private mutating func handleContextChanges(previousPhase: JSONStateMachine.Phase) {
+    private func handleContextChanges(previousPhase: JSONStateMachine.Phase) {
         // Check if we entered a new object
         if case .inObject(.expectValue) = previousPhase,
            case .inObject(.expectKeyOrEnd) = stateMachine.phase {
@@ -355,11 +381,13 @@ public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
         return entropy.item(Float.self)
     }
     
-    private func displayKeyGenerationStep(_ info: LogitInfo) {
-        print("\n[KeyDetection] Step \(info.step) | Entropy: \(String(format: "%.2f", info.entropy)) \(entropyDescription(info.entropy))")
-        print("[KeyDetection] Top-\(min(topK, info.topCandidates.count)) key candidates:")
+    private func displayStep(_ info: LogitInfo, isKey: Bool) {
+        // Use consistent format for all tokens
+        let keyMarker = isKey ? " 🔑 KEY" : ""
+        print("\n[Step \(info.step)] Entropy: \(String(format: "%.2f", info.entropy)) (\(entropyDescription(info.entropy)))\(keyMarker)")
         
-        for (index, candidate) in info.topCandidates.prefix(topK).enumerated() {
+        // Show top candidates with consistent formatting
+        for (index, candidate) in info.topCandidates.prefix(min(5, topK)).enumerated() {
             let probValue = String(format: "%.1f%%", candidate.probability * 100)
             
             // Format text for display
@@ -373,6 +401,7 @@ public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
             print("  \(index + 1). [\(String(format: "%6d", candidate.tokenId))] \(bar) \"\(displayText)\" \(probValue)")
         }
     }
+    
     
     private func formatTokenForDisplay(_ text: String) -> String {
         if text == "\n" {
@@ -403,6 +432,39 @@ public struct KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
             return "🔴 Uncertain"
         default:
             return "⚫ Very Uncertain"
+        }
+    }
+    
+    // MARK: - Finish Method
+    
+    /// Process any remaining pending logit info when generation completes
+    public func finish() {
+        // Display the last pending entropy if it was in key generation
+        if let pending = pendingLogitInfo,
+           wasInKeyGeneration,
+           showProbabilities,
+           verbose {
+            // Check if the pending token was a quote
+            if let topCandidate = pending.topCandidates.first,
+               let text = topCandidate.text,
+               text == "\"" || text.contains("\"") {
+                // Skip displaying for quote tokens
+            } else {
+                print("\n[Final Token]")
+                displayStep(pending, isKey: true)
+            }
+        }
+        
+        // Clear pending state
+        pendingLogitInfo = nil
+        wasInKeyGeneration = false
+        
+        if verbose {
+            print("\n[KeyDetection] Generation completed")
+            print("[KeyDetection] Total keys detected: \(detectedKeys.count)")
+            if !detectedKeys.isEmpty {
+                print("[KeyDetection] Keys: \(detectedKeys.joined(separator: ", "))")
+            }
         }
     }
 }

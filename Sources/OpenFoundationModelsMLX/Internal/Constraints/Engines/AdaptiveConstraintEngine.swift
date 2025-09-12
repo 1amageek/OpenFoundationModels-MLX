@@ -27,15 +27,17 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         // Create tokenizer adapter
         let tokenizerAdapter = MLXLLMTokenizer(tokenizer: tokenizer)
         
-        // Always create ObservableLogitProcessor for all modes
-        let observableProcessor = ObservableLogitProcessor(
-            tokenizer: tokenizerAdapter,
-            topK: 10,
-            verbose: true  // Enable verbose for debugging
-        )
+        // Debug: Check what schema we received
+        if let schema = schema {
+            print("[AdaptiveConstraintEngine] Schema received - Kind: \(schema.kind), Keys: \(schema.objectKeys), isEmpty: \(schema.isEmpty)")
+        } else {
+            print("[AdaptiveConstraintEngine] No schema received")
+        }
         
-        // Determine mode and additional processors based on schema
+        // Determine mode and processors based on schema
         if let schema = schema, !schema.isEmpty {
+            print("[AdaptiveConstraintEngine] Preparing KeyDetectionLogitProcessor for JSON mode")
+            
             // JSON mode with schema constraints
             // Create key detection processor for JSON debugging with enhanced features
             let keyDetectionProcessor = KeyDetectionLogitProcessor(
@@ -50,17 +52,17 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             mutex.withLock {
                 $0.mode = .hard
                 $0.preparedSchema = schema
-                $0.observableProcessor = observableProcessor
+                $0.observableProcessor = nil  // Not using ObservableLogitProcessor
                 $0.keyDetectionProcessor = keyDetectionProcessor
                 $0.schemaProcessors = [] // Will be populated with ADAPT processors
             }
         } else {
-            // Text mode - only observation, no constraints
+            // Text mode - no processors
             mutex.withLock {
                 $0.mode = .off
                 $0.preparedSchema = nil
-                $0.observableProcessor = observableProcessor
-                $0.keyDetectionProcessor = nil  // No key detection in text mode
+                $0.observableProcessor = nil
+                $0.keyDetectionProcessor = nil
                 $0.schemaProcessors = []
             }
         }
@@ -75,10 +77,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         return mutex.withLock { state in
             var processors: [any LogitProcessor] = []
             
-            // Always include ObservableLogitProcessor first
-            if let observable = state.observableProcessor {
-                processors.append(observable)
-            }
+            // Only use KeyDetectionLogitProcessor, not ObservableLogitProcessor
             
             // Add key detection processor if in JSON mode
             if let keyDetection = state.keyDetectionProcessor {

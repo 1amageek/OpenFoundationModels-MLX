@@ -4,77 +4,76 @@ import OpenFoundationModelsMLX
 @main
 struct KeyDetectionCLI {
     static func main() {
-        // Run array debug test first if needed
-        if CommandLine.arguments.contains("--debug-array") {
-            testArrayDebug()
-            return
-        }
+        print("🔍 Comprehensive JSON Key Detection Test Suite")
+        print("=" * 60)
+        print()
         
-        // Test with processor
-        if CommandLine.arguments.contains("--test-processor") {
-            testProcessorWithSimulatedTokens()
-            return
-        }
+        // Section 1: Complete JSON Tests
+        print("📝 Section 1: Complete JSON Detection")
+        print("-" * 50)
+        testCompleteJSON()
         
-        // Simple test without MLX
-        if CommandLine.arguments.contains("--test-simple") {
-            testProcessorSimple()
-            return
-        }
+        // Section 2: Incomplete JSON (LLM-style generation)
+        print("\n📝 Section 2: Incomplete JSON (LLM Token-by-Token)")
+        print("-" * 50)
+        testIncompleteJSON()
         
-        // Test enhanced processor
-        if CommandLine.arguments.contains("--test-enhanced") {
-            testEnhancedProcessor()
-            return
-        }
+        // Section 3: Token-split keys (Real LLM behavior)
+        print("\n📝 Section 3: Token-Split Keys (Real LLM Behavior)")
+        print("-" * 50)
+        testTokenSplitKeys()
         
-        print("🔍 JSON Key Detection Test")
-        print("=" * 50)
+        // Section 4: Enhanced processor with probabilities
+        print("\n📝 Section 4: Enhanced Processor with Probability Analysis")
+        print("-" * 50)
+        testEnhancedProcessor()
         
-        // Test JSON samples
-        let testCases = [
-            // Simple flat object
-            #"{"name":"John","age":30,"city":"NYC"}"#,
-            
-            // Nested object
-            #"{"user":{"firstName":"Alice","lastName":"Smith","email":"alice@example.com"},"active":true}"#,
-            
-            // Array with objects
-            #"{"items":[{"id":1,"name":"Item1"},{"id":2,"name":"Item2"}],"total":2}"#,
-            
-            // Complex nested structure
-            #"{"company":"TechCorp","contact":{"phone":"555-1234","address":{"street":"123 Main","city":"SF"}}}"#,
-            
-            // With markdown code block
-            """
-            ```json
-            {"format":"markdown","content":"test","valid":true}
-            ```
-            """,
-            
-            // With text prefix
-            """
-            Here is the generated JSON response:
-            {"status":"success","code":200,"message":"OK"}
-            """,
-            
-            // With channel tags (like GPT models)
-            """
-            <|channel|>analysis<|message|>Let me create the JSON<|end|>
-            <|channel|>final<|message|>{"result":"computed","value":42}
-            """
-        ]
+        // Section 5: Array handling
+        print("\n📝 Section 5: Array and Nested Structure Handling")
+        print("-" * 50)
+        testArrayDebug()
         
-        for (index, jsonString) in testCases.enumerated() {
-            print("\n📝 Test Case \(index + 1):")
-            print("Input: \(jsonString)")
-            print("\nDetected Keys:")
-            
-            testKeyDetection(jsonString: jsonString)
-            
-            print("-" * 50)
-        }
+        print("\n" + "=" * 60)
+        print("✅ All tests completed")
+        print("=" * 60)
     }
+    
+    // MARK: - Section 1: Complete JSON Tests
+    
+    static func testCompleteJSON() {
+        print("\nTesting complete JSON structures:")
+        
+        // Test Case 1: Simple object
+        print("\n[Test 1] Simple Object:")
+        let json1 = #"{"name":"John","age":30,"city":"New York"}"#
+        testKeyDetection(jsonString: json1)
+        
+        // Test Case 2: Nested object
+        print("\n[Test 2] Nested Object:")
+        let json2 = #"{"user":{"name":"Alice","email":"alice@example.com"},"status":"active"}"#
+        testKeyDetection(jsonString: json2)
+        
+        // Test Case 3: Array with objects
+        print("\n[Test 3] Array with Objects:")
+        let json3 = #"{"items":[{"id":1,"name":"Item1"},{"id":2,"name":"Item2"}],"total":2}"#
+        testKeyDetection(jsonString: json3)
+        
+        // Test Case 4: JSON with markdown wrapper
+        print("\n[Test 4] Markdown Code Block:")
+        let json4 = """
+```json
+{"config":{"timeout":30,"retries":3},"enabled":true}
+```
+"""
+        testKeyDetection(jsonString: json4)
+        
+        // Test Case 5: Complex nested structure
+        print("\n[Test 5] Complex Nested Structure:")
+        let json5 = #"{"company":{"name":"TechCorp","employees":[{"name":"Bob","department":"Engineering"},{"name":"Carol","department":"Sales"}],"location":{"city":"SF","country":"USA"}},"founded":2020}"#
+        testKeyDetection(jsonString: json5)
+    }
+    
+    // MARK: - Helper Methods
     
     static func testKeyDetection(jsonString: String) {
         print("\n--- Using JSONStateMachine (Real ADAPT Implementation) ---")
