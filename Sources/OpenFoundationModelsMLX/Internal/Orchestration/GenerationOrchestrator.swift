@@ -31,10 +31,10 @@ actor GenerationOrchestrator {
         self.executor = executor
         self.maxRetries = maxRetries
         
-        // Temporarily use NullConstraintEngine to debug
+        // Use AdaptiveConstraintEngine for unified pipeline
         self.pipeline = GenerationPipeline(
             executor: executor,
-            constraints: NullConstraintEngine(),
+            constraints: AdaptiveConstraintEngine(),
             retryPolicy: RetryPolicy(maxAttempts: maxRetries),
             telemetry: NoOpTelemetry()
         )

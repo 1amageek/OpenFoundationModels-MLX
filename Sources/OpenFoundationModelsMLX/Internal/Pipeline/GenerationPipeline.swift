@@ -39,12 +39,11 @@ struct GenerationPipeline: Sendable {
             await telemetry.event(.promptBuilt, metadata: ["soft_constraints_added": true])
         }
         
-        if constraints.mode == .hard || (constraints.mode != .off && schema != nil) {
-            try await executor.withTokenizer { tokenizer in
-                try await constraints.prepare(schema: schema, tokenizer: tokenizer)
-            }
-            await telemetry.event(.constraintsPrepared, metadata: ["mode": constraints.mode.rawValue])
+        // Always prepare constraints to enable observation for all modes
+        try await executor.withTokenizer { tokenizer in
+            try await constraints.prepare(schema: schema, tokenizer: tokenizer)
         }
+        await telemetry.event(.constraintsPrepared, metadata: ["mode": constraints.mode.rawValue])
         
         let processors = await constraints.logitProcessors()
         
@@ -181,10 +180,9 @@ struct GenerationPipeline: Sendable {
                         finalPrompt = prompt + "\n\n" + softPrompt
                     }
                     
-                    if constraints.mode == .hard || (constraints.mode != .off && schema != nil) {
-                        try await executor.withTokenizer { tokenizer in
-                            try await constraints.prepare(schema: schema, tokenizer: tokenizer)
-                        }
+                    // Always prepare constraints to enable observation for all modes
+                    try await executor.withTokenizer { tokenizer in
+                        try await constraints.prepare(schema: schema, tokenizer: tokenizer)
                     }
                     
                     let processors = await constraints.logitProcessors()
@@ -250,9 +248,13 @@ struct GenerationPipeline: Sendable {
             let searchStartIndex = trimmed.index(after: jsonStart.lowerBound)
             if searchStartIndex < trimmed.endIndex,
                let jsonEnd = trimmed.range(of: "}", options: .backwards, range: searchStartIndex..<trimmed.endIndex) {
-                let extracted = String(trimmed[jsonStart.lowerBound...jsonEnd.upperBound])
-                Logger.info("[extractJSONFromText] Found JSON object, length: \(extracted.count)")
-                return extracted
+                // Use jsonEnd.lowerBound instead of upperBound to avoid index out of bounds
+                let endIndex = jsonEnd.lowerBound
+                if endIndex >= jsonStart.lowerBound && endIndex < trimmed.endIndex {
+                    let extracted = String(trimmed[jsonStart.lowerBound...endIndex])
+                    Logger.info("[extractJSONFromText] Found JSON object, length: \(extracted.count)")
+                    return extracted
+                }
             }
         }
         
@@ -262,9 +264,13 @@ struct GenerationPipeline: Sendable {
             let searchStartIndex = trimmed.index(after: jsonStart.lowerBound)
             if searchStartIndex < trimmed.endIndex,
                let jsonEnd = trimmed.range(of: "]", options: .backwards, range: searchStartIndex..<trimmed.endIndex) {
-                let extracted = String(trimmed[jsonStart.lowerBound...jsonEnd.upperBound])
-                Logger.info("[extractJSONFromText] Found JSON array, length: \(extracted.count)")
-                return extracted
+                // Use jsonEnd.lowerBound instead of upperBound to avoid index out of bounds
+                let endIndex = jsonEnd.lowerBound
+                if endIndex >= jsonStart.lowerBound && endIndex < trimmed.endIndex {
+                    let extracted = String(trimmed[jsonStart.lowerBound...endIndex])
+                    Logger.info("[extractJSONFromText] Found JSON array, length: \(extracted.count)")
+                    return extracted
+                }
             }
         }
         

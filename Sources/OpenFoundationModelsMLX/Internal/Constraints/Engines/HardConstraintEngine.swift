@@ -30,7 +30,7 @@ final class HardConstraintEngine: ConstraintEngine, @unchecked Sendable {
         let processor = ObservableLogitProcessor(
             tokenizer: tokenizerAdapter,
             topK: 10,
-            verbose: true  // Can be configured based on environment
+            verbose: true  // Debug: verbose output enabled
         )
         
         logitProcessors.withLock { $0 = [processor] }

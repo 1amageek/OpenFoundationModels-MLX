@@ -35,21 +35,9 @@ public struct ObservableLogitProcessor: LogitProcessor {
         lastInfo = nil
         
         if verbose {
-            print("\n" + String(repeating: "=", count: 50))
-            print("Generation Started")
-            print(String(repeating: "=", count: 50))
-            
+            print("\n===== 🚀 Generation Started =====")
             let tokens = prompt.asArray(Int32.self)
-            print("Prompt length: \(tokens.count) tokens")
-            
-            // Optionally show last few tokens of prompt
-            if let tokenizer = tokenizer, tokens.count > 0 {
-                let lastTokens = Array(tokens.suffix(10))
-                let text = tokenizer.decode(lastTokens)
-                print("Prompt tail: ...\(text)")
-            }
-            
-            print(String(repeating: "-", count: 50) + "\n")
+            print("Prompt: \(tokens.count) tokens\n")
         }
     }
     
@@ -77,13 +65,28 @@ public struct ObservableLogitProcessor: LogitProcessor {
         // Now we can update state since this is mutating
         if verbose {
             let text = tokenizer?.decode([tokenId]) ?? "<unknown>"
-            let displayText = text
-                .replacingOccurrences(of: "\n", with: "\\n")
-                .replacingOccurrences(of: "\t", with: "\\t")
-                .replacingOccurrences(of: "\r", with: "\\r")
             
-            print("→ Selected: [\(tokenId)] '\(displayText)'")
-            print(String(repeating: "-", count: 50) + "\n")
+            // Format the text for display
+            let displayText: String
+            if text == "\n" {
+                displayText = "↵ (newline)"
+            } else if text == "\t" {
+                displayText = "→ (tab)"
+            } else if text == " " {
+                displayText = "␣ (space)"
+            } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                displayText = "⎵ (whitespace)"
+            } else {
+                displayText = text
+            }
+            
+            // Show the selected token
+            print("✅ [\(tokenId)] → \"\(displayText)\"")
+            
+            // Print the actual generated text (without escaping)
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                print("   Output: \(text)", terminator: "")
+            }
         }
     }
     
@@ -158,7 +161,51 @@ public struct ObservableLogitProcessor: LogitProcessor {
     }
     
     private func displayStep(_ info: LogitInfo) {
-        print("Step \(info.step) (vocab size: \(info.vocabSize), entropy: \(String(format: "%.2f", info.entropy)))")
-        print(info.formatCandidates(limit: min(5, topK)))
+        // Simple header
+        print("\n[Step \(info.step)] Entropy: \(String(format: "%.2f", info.entropy)) (\(entropyDescription(info.entropy)))")
+        
+        for (index, candidate) in info.topCandidates.prefix(min(5, topK)).enumerated() {
+            let probValue = String(format: "%.1f", candidate.probability * 100)
+            
+            // Format text for display
+            let text = candidate.text ?? "<unknown>"
+            let displayText: String
+            if text == "\n" {
+                displayText = "\\n"
+            } else if text == "\t" {
+                displayText = "\\t"
+            } else if text == " " {
+                displayText = "␣"
+            } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                displayText = "⎵"
+            } else {
+                // Truncate long text
+                displayText = String(text.prefix(20))
+                    .replacingOccurrences(of: "\n", with: "\\n")
+                    .replacingOccurrences(of: "\t", with: "\\t")
+            }
+            
+            // Simple bar visualization
+            let barLength = Int(candidate.probability * 10)
+            let bar = String(repeating: "▓", count: barLength) + String(repeating: "░", count: 10 - barLength)
+            
+            let tokenIdStr = String(candidate.tokenId).padding(toLength: 6, withPad: " ", startingAt: 0)
+            print("  \(index + 1). [\(tokenIdStr)] \(bar) \"\(displayText)\" \(probValue)%")
+        }
+    }
+    
+    private func entropyDescription(_ entropy: Float) -> String {
+        switch entropy {
+        case ..<0.5:
+            return "🟢 Very Confident"
+        case 0.5..<1.5:
+            return "🟡 Confident"
+        case 1.5..<3.0:
+            return "🟠 Moderate"
+        case 3.0..<5.0:
+            return "🔴 Uncertain"
+        default:
+            return "⚫ Very Uncertain"
+        }
     }
 }

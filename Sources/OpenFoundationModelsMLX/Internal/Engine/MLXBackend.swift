@@ -66,21 +66,7 @@ public actor MLXBackend {
             responseFormat = .text
         }
         
-        // For text mode, bypass the pipeline and execute directly
-        if case .text = responseFormat {
-            let params = GenerateParameters(
-                maxTokens: sampling.maxTokens ?? 1024,
-                temperature: Float(sampling.temperature ?? 0.7),
-                topP: Float(sampling.topP ?? 1.0)
-            )
-            return try await executor.execute(
-                prompt: prompt,
-                parameters: params,
-                logitProcessor: nil
-            )
-        }
-        
-        // For JSON schema mode, use the pipeline
+        // Use unified pipeline for both text and JSON modes
         let modelID = await currentModel() ?? "unknown"
         let req = ChatRequest(
             modelID: modelID,
@@ -91,6 +77,7 @@ public actor MLXBackend {
             parameters: nil
         )
         
+        // All requests go through the orchestrator for consistent pipeline
         let response = try await orchestrator.generate(req)
         return response.choices.first?.content ?? ""
     }
@@ -122,29 +109,7 @@ public actor MLXBackend {
                         responseFormat = .text
                     }
                     
-                    // For text mode, bypass the pipeline and stream directly
-                    if case .text = responseFormat {
-                        let params = GenerateParameters(
-                            maxTokens: sampling.maxTokens ?? 1024,
-                            temperature: Float(sampling.temperature ?? 0.7),
-                            topP: Float(sampling.topP ?? 1.0)
-                        )
-                        
-                        let directStream = await executor.executeStream(
-                            prompt: prompt,
-                            parameters: params,
-                            logitProcessor: nil
-                        )
-                        
-                        for try await text in directStream {
-                            try Task.checkCancellation()
-                            continuation.yield(text)
-                        }
-                        continuation.finish()
-                        return
-                    }
-                    
-                    // For JSON schema mode, use the pipeline
+                    // Use unified pipeline for both text and JSON modes
                     let modelID = await currentModel() ?? "unknown"
                     let req = ChatRequest(
                         modelID: modelID,
