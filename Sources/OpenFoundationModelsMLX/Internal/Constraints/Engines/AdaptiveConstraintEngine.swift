@@ -13,6 +13,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         var mode: ConstraintMode = .off
         var preparedSchema: SchemaNode?
         var observableProcessor: ObservableLogitProcessor?
+        var keyDetectionProcessor: KeyDetectionLogitProcessor?
         var schemaProcessors: [any LogitProcessor] = []
     }
     
@@ -36,12 +37,19 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         // Determine mode and additional processors based on schema
         if let schema = schema, !schema.isEmpty {
             // JSON mode with schema constraints
+            // Create key detection processor for JSON debugging
+            let keyDetectionProcessor = KeyDetectionLogitProcessor(
+                tokenizer: tokenizerAdapter,
+                verbose: true  // Enable verbose output for key detection
+            )
+            
             // Future: Add TokenTrieLogitProcessor or other ADAPT implementations here
             
             mutex.withLock {
                 $0.mode = .hard
                 $0.preparedSchema = schema
                 $0.observableProcessor = observableProcessor
+                $0.keyDetectionProcessor = keyDetectionProcessor
                 $0.schemaProcessors = [] // Will be populated with ADAPT processors
             }
         } else {
@@ -50,6 +58,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
                 $0.mode = .off
                 $0.preparedSchema = nil
                 $0.observableProcessor = observableProcessor
+                $0.keyDetectionProcessor = nil  // No key detection in text mode
                 $0.schemaProcessors = []
             }
         }
@@ -67,6 +76,11 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             // Always include ObservableLogitProcessor first
             if let observable = state.observableProcessor {
                 processors.append(observable)
+            }
+            
+            // Add key detection processor if in JSON mode
+            if let keyDetection = state.keyDetectionProcessor {
+                processors.append(keyDetection)
             }
             
             // Add schema-specific processors if in JSON mode
