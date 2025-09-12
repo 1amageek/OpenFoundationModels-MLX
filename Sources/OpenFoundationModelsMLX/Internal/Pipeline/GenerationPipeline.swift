@@ -106,8 +106,14 @@ struct GenerationPipeline: Sendable {
                     "output_length": raw.count
                 ])
                 
-                // Always extract JSON for structured generation
-                let output = extractJSONFromText(raw)
+                // Log the generated output
+                Logger.info("[GenerationPipeline] Generated output (\(raw.count) characters):")
+                Logger.info("========== START OUTPUT ==========")
+                Logger.info(raw)
+                Logger.info("========== END OUTPUT ==========")
+                
+                // Return raw output as-is
+                let output = raw
                 
                 if let validator = constraints.validator() {
                     await telemetry.event(.validationStarted, metadata: [:])
@@ -191,10 +197,8 @@ struct GenerationPipeline: Sendable {
                     }
                     
                     if let validator = constraints.validator() {
-                        // Always extract JSON for structured generation
-                        let output = extractJSONFromText(buffer)
-                        
-                        if case .failure(let error) = await validator.validate(output, schema: schema) {
+                        // Validate the raw buffer directly
+                        if case .failure(let error) = await validator.validate(buffer, schema: schema) {
                             throw error
                         }
                     }
@@ -208,40 +212,6 @@ struct GenerationPipeline: Sendable {
         }
     }
     
-    private func extractJSONFromText(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Return empty string if input is empty
-        if trimmed.isEmpty {
-            return ""
-        }
-        
-        // Find JSON object
-        if let jsonStart = trimmed.range(of: "{") {
-            let searchStartIndex = trimmed.index(after: jsonStart.lowerBound)
-            if searchStartIndex < trimmed.endIndex,
-               let jsonEnd = trimmed.range(of: "}", options: .backwards, range: searchStartIndex..<trimmed.endIndex) {
-                let endIndex = jsonEnd.lowerBound
-                if endIndex >= jsonStart.lowerBound && endIndex < trimmed.endIndex {
-                    return String(trimmed[jsonStart.lowerBound...endIndex])
-                }
-            }
-        }
-        
-        // Find JSON array
-        if let jsonStart = trimmed.range(of: "[") {
-            let searchStartIndex = trimmed.index(after: jsonStart.lowerBound)
-            if searchStartIndex < trimmed.endIndex,
-               let jsonEnd = trimmed.range(of: "]", options: .backwards, range: searchStartIndex..<trimmed.endIndex) {
-                let endIndex = jsonEnd.lowerBound
-                if endIndex >= jsonStart.lowerBound && endIndex < trimmed.endIndex {
-                    return String(trimmed[jsonStart.lowerBound...endIndex])
-                }
-            }
-        }
-        
-        return trimmed
-    }
 }
 
 extension MLXExecutor {
