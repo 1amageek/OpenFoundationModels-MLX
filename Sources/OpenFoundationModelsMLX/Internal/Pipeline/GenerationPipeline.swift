@@ -91,10 +91,6 @@ struct GenerationPipeline: Sendable {
             do {
                 await telemetry.event(.generationStarted, metadata: [:])
                 
-                // Use streaming to show real-time generation
-                Logger.info("[GenerationPipeline] Starting LLM generation...")
-                Logger.info("[GenerationPipeline] ========== RAW LLM OUTPUT START ==========")
-                
                 var raw = ""
                 let stream = await executor.executeStream(
                     prompt: finalPrompt,
@@ -104,13 +100,7 @@ struct GenerationPipeline: Sendable {
                 
                 for try await chunk in stream {
                     raw += chunk
-                    // Print for debugging raw output
-                    print(chunk, terminator: "")
-                    fflush(stdout)
                 }
-                
-                Logger.info("\n[GenerationPipeline] ========== RAW LLM OUTPUT END ==========")
-                Logger.info("[GenerationPipeline] Total output length: \(raw.count) characters")
                 
                 await telemetry.event(.generationCompleted, metadata: [
                     "output_length": raw.count
@@ -118,7 +108,6 @@ struct GenerationPipeline: Sendable {
                 
                 // Always extract JSON for structured generation
                 let output = extractJSONFromText(raw)
-                Logger.info("[GenerationPipeline] Extracted JSON length: \(output.count) characters")
                 
                 if let validator = constraints.validator() {
                     await telemetry.event(.validationStarted, metadata: [:])
@@ -222,53 +211,35 @@ struct GenerationPipeline: Sendable {
     private func extractJSONFromText(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Log what we're trying to extract from
-        Logger.info("[extractJSONFromText] Input text length: \(trimmed.count)")
-        if trimmed.count < 200 {
-            Logger.info("[extractJSONFromText] Full text: \(trimmed)")
-        } else {
-            Logger.info("[extractJSONFromText] First 200 chars: \(trimmed.prefix(200))")
-        }
-        
         // Return empty string if input is empty
         if trimmed.isEmpty {
-            Logger.warning("[extractJSONFromText] Empty input, returning empty string")
             return ""
         }
         
         // Find JSON object
         if let jsonStart = trimmed.range(of: "{") {
-            // Search for closing brace after the opening brace
             let searchStartIndex = trimmed.index(after: jsonStart.lowerBound)
             if searchStartIndex < trimmed.endIndex,
                let jsonEnd = trimmed.range(of: "}", options: .backwards, range: searchStartIndex..<trimmed.endIndex) {
-                // Use jsonEnd.lowerBound instead of upperBound to avoid index out of bounds
                 let endIndex = jsonEnd.lowerBound
                 if endIndex >= jsonStart.lowerBound && endIndex < trimmed.endIndex {
-                    let extracted = String(trimmed[jsonStart.lowerBound...endIndex])
-                    Logger.info("[extractJSONFromText] Found JSON object, length: \(extracted.count)")
-                    return extracted
+                    return String(trimmed[jsonStart.lowerBound...endIndex])
                 }
             }
         }
         
         // Find JSON array
         if let jsonStart = trimmed.range(of: "[") {
-            // Search for closing bracket after the opening bracket
             let searchStartIndex = trimmed.index(after: jsonStart.lowerBound)
             if searchStartIndex < trimmed.endIndex,
                let jsonEnd = trimmed.range(of: "]", options: .backwards, range: searchStartIndex..<trimmed.endIndex) {
-                // Use jsonEnd.lowerBound instead of upperBound to avoid index out of bounds
                 let endIndex = jsonEnd.lowerBound
                 if endIndex >= jsonStart.lowerBound && endIndex < trimmed.endIndex {
-                    let extracted = String(trimmed[jsonStart.lowerBound...endIndex])
-                    Logger.info("[extractJSONFromText] Found JSON array, length: \(extracted.count)")
-                    return extracted
+                    return String(trimmed[jsonStart.lowerBound...endIndex])
                 }
             }
         }
         
-        Logger.warning("[extractJSONFromText] No JSON found, returning trimmed text")
         return trimmed
     }
 }

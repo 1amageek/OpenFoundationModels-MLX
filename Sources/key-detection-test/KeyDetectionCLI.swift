@@ -33,6 +33,16 @@ struct KeyDetectionCLI {
         print("-" * 50)
         testArrayDebug()
         
+        // Section 6: JSONExtractor tests
+        print("\n📝 Section 6: JSONExtractor with Embedded JSON")
+        print("-" * 50)
+        testJSONExtractor()
+        
+        // Section 7: JSONExtractor integration
+        print("\n📝 Section 7: JSONExtractor + JSONStateMachine Integration")
+        print("-" * 50)
+        testJSONExtractorIntegration()
+        
         print("\n" + "=" * 60)
         print("✅ All tests completed")
         print("=" * 60)

@@ -15,6 +15,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     private let showProbabilities: Bool
     
     // Mutable state
+    private var jsonExtractor = JSONExtractor()  // Extract JSON from arbitrary text
     private var stateMachine = JSONStateMachine()
     private var generatedText = ""
     private var detectedKeys: [String] = []
@@ -50,6 +51,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     
     public func prompt(_ prompt: MLXArray) {
         // Reset state for new generation
+        jsonExtractor.reset()
         stateMachine.reset()
         generatedText = ""
         detectedKeys = []
@@ -104,43 +106,57 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         generatedText.append(text)
         lastProcessedText = text
         
-        // Process each character through the state machine
+        // Process each character through the JSON extractor first
         for char in text {
-            // Store previous phase for comparison
-            let previousPhase = stateMachine.phase
+            // Use JSONExtractor to find JSON content
+            let shouldProcess = jsonExtractor.processCharacter(char)
             
-            // Process the character
-            stateMachine.processCharacter(char)
-            
-            // Check if we just exited key generation
-            if case .inString(.body(kind: .key, escaped: false)) = previousPhase {
-                if case .inObject(.expectColon) = stateMachine.phase {
-                    // Key just completed - capture it immediately
-                    let keyName = stateMachine.currentKey
-                    if !keyName.isEmpty {
-                        detectedKeys.append(keyName)
-                        
-                        if verbose {
-                            let level = stateMachine.nestingLevel - 1
-                            let indent = String(repeating: "  ", count: level)
+            // Only process with JSONStateMachine if we're in JSON content
+            if shouldProcess {
+                // Store previous phase for comparison
+                let previousPhase = stateMachine.phase
+                
+                // Process the character
+                stateMachine.processCharacter(char)
+                
+                // Check if we just exited key generation
+                if case .inString(.body(kind: .key, escaped: false)) = previousPhase {
+                    if case .inObject(.expectColon) = stateMachine.phase {
+                        // Key just completed - capture it immediately
+                        let keyName = stateMachine.currentKey
+                        if !keyName.isEmpty {
+                            detectedKeys.append(keyName)
                             
-                            if level > 0 {
-                                let context = nestingStack.last ?? "object"
-                                print("[KeyDetection] \(indent)📍 Level \(level) key: \"\(keyName)\" (in \(context))")
-                            } else {
-                                print("[KeyDetection] 🔑 Root key: \"\(keyName)\"")
+                            if verbose {
+                                let level = stateMachine.nestingLevel - 1
+                                let indent = String(repeating: "  ", count: level)
+                                
+                                if level > 0 {
+                                    let context = nestingStack.last ?? "object"
+                                    print("[KeyDetection] \(indent)📍 Level \(level) key: \"\(keyName)\" (in \(context))")
+                                } else {
+                                    print("[KeyDetection] 🔑 Root key: \"\(keyName)\"")
+                                }
                             }
                         }
                     }
                 }
-            }
-            
-            // Check for context changes (entering/exiting objects)
-            handleContextChanges(previousPhase: previousPhase)
-            
-            // Debug output for phase transitions (only if not showing probabilities to reduce noise)
-            if verbose && !showProbabilities && hasPhaseChanged(from: previousPhase, to: stateMachine.phase) {
-                printPhaseTransition(from: previousPhase, to: stateMachine.phase)
+                
+                // Check for context changes (entering/exiting objects)
+                handleContextChanges(previousPhase: previousPhase)
+                
+                // Debug output for phase transitions (only if not showing probabilities to reduce noise)
+                if verbose && !showProbabilities && hasPhaseChanged(from: previousPhase, to: stateMachine.phase) {
+                    printPhaseTransition(from: previousPhase, to: stateMachine.phase)
+                }
+            } else if verbose && !jsonExtractor.jsonFound {
+                // Optionally log that we're still scanning for JSON
+                // This is useful for debugging GPT OSS format issues
+                if char == "<" || char == "|" || char == ">" {
+                    // Likely GPT OSS special tokens, don't spam logs
+                } else if !char.isWhitespace {
+                    // Log non-whitespace skipped characters sparingly
+                }
             }
         }
         
@@ -373,18 +389,33 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     private func calculateEntropy(probs: MLXArray) -> Float {
         // H = -Σ p * log(p)
         // Add small epsilon to avoid log(0)
-        let logProbs = log(probs + 1e-10)
+        let epsilon: Float = 1e-10
+        let clippedProbs = probs + epsilon
+        let logProbs = log(clippedProbs)
         let entropy = -sum(probs * logProbs, axis: -1)
         
         // Evaluate and extract scalar
         entropy.eval()
-        return entropy.item(Float.self)
+        let result = entropy.item(Float.self)
+        
+        // Check for NaN and return 0 (perfect certainty)
+        if result.isNaN || result.isInfinite {
+            return 0.0
+        }
+        
+        // Clamp very small values to 0
+        if result < epsilon {
+            return 0.0
+        }
+        
+        return result
     }
     
     private func displayStep(_ info: LogitInfo, isKey: Bool) {
         // Use consistent format for all tokens
         let keyMarker = isKey ? " 🔑 KEY" : ""
-        print("\n[Step \(info.step)] Entropy: \(String(format: "%.2f", info.entropy)) (\(entropyDescription(info.entropy)))\(keyMarker)")
+        let entropyStr = info.entropy.isNaN ? "0.00" : String(format: "%.2f", info.entropy)
+        print("\n[Step \(info.step)] Entropy: \(entropyStr) (\(entropyDescription(info.entropy)))\(keyMarker)")
         
         // Show top candidates with consistent formatting
         for (index, candidate) in info.topCandidates.prefix(min(5, topK)).enumerated() {
@@ -421,8 +452,15 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     }
     
     private func entropyDescription(_ entropy: Float) -> String {
+        // Handle NaN and special cases
+        if entropy.isNaN {
+            return "🟢 Perfect Confidence (100%)"
+        }
+        
         switch entropy {
-        case ..<0.5:
+        case ..<0.01:
+            return "🟢 Perfect Confidence"
+        case 0.01..<0.5:
             return "🟢 Very Confident"
         case 0.5..<1.5:
             return "🟡 Confident"

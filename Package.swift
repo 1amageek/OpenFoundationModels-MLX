@@ -57,6 +57,13 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
             ]
         ),
+        // JSON Extractor test CLI
+        .executableTarget(
+            name: "json-extractor-test",
+            dependencies: [
+                "OpenFoundationModelsMLX",
+            ]
+        ),
         // Main test target
         .testTarget(
             name: "OpenFoundationModelsMLXTests",
