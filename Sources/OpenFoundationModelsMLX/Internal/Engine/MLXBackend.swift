@@ -1,5 +1,6 @@
 import Foundation
 import MLXLMCommon
+import MLXLLM
 
 public actor MLXBackend {
     
@@ -23,10 +24,11 @@ public actor MLXBackend {
     }
     
     
-    public init() {
+    public init(additionalProcessors: [LogitProcessor] = []) {
         self.executor = MLXExecutor()
         self.orchestrator = GenerationOrchestrator(
-            executor: executor
+            executor: executor,
+            additionalProcessors: additionalProcessors
         )
     }
     

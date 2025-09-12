@@ -31,16 +31,18 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         let observableProcessor = ObservableLogitProcessor(
             tokenizer: tokenizerAdapter,
             topK: 10,
-            verbose: false  // Always verbose for debugging
+            verbose: true  // Enable verbose for debugging
         )
         
         // Determine mode and additional processors based on schema
         if let schema = schema, !schema.isEmpty {
             // JSON mode with schema constraints
-            // Create key detection processor for JSON debugging
+            // Create key detection processor for JSON debugging with enhanced features
             let keyDetectionProcessor = KeyDetectionLogitProcessor(
                 tokenizer: tokenizerAdapter,
-                verbose: true  // Enable verbose output for key detection
+                verbose: true,  // Enable verbose output for key detection
+                topK: 5,        // Show top-5 candidates
+                showProbabilities: true  // Show probability distributions
             )
             
             // Future: Add TokenTrieLogitProcessor or other ADAPT implementations here

@@ -85,11 +85,16 @@ struct GenerableBasedCLI {
             
             print("\n✅ Model loaded\n")
             
-            // Create language model
+            // Create language model first
             let languageModel = try await MLXLanguageModel(
                 modelContainer: container,
                 card: modelCard
             )
+            
+            // Note: KeyDetectionLogitProcessor would require access to tokenizer
+            // which is internal to the model. For now, we'll use the model without it.
+            print("💡 KeyDetectionLogitProcessor support is enabled in the pipeline")
+            print("   To see detailed key detection, the model will use internal processors\n")
             
             // Create session
             let session = LanguageModelSession(

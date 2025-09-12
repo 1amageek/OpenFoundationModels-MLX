@@ -2,6 +2,7 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 import MLXLMCommon
+import MLXLLM
 
 /// MLXLanguageModel is the provider adapter that conforms to the
 /// OpenFoundationModels LanguageModel protocol, delegating core work to the
@@ -16,10 +17,15 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     /// - Parameters:
     ///   - modelContainer: Pre-loaded model from ModelLoader
     ///   - card: ModelCard that defines prompt rendering and parameters
-    public init(modelContainer: ModelContainer, card: any ModelCard) async throws {
+    ///   - additionalProcessors: Optional additional LogitProcessors (e.g., KeyDetectionLogitProcessor)
+    public init(
+        modelContainer: ModelContainer, 
+        card: any ModelCard,
+        additionalProcessors: [LogitProcessor] = []
+    ) async throws {
         self.card = card
         
-        let backend = MLXBackend()
+        let backend = MLXBackend(additionalProcessors: additionalProcessors)
         await backend.setModel(modelContainer, modelID: card.id)
         self.backend = backend
     }

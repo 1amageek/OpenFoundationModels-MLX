@@ -9,17 +9,20 @@ struct GenerationPipeline: Sendable {
     let constraints: any ConstraintEngine
     let retryPolicy: RetryPolicy
     let telemetry: any Telemetry
+    let additionalProcessors: [LogitProcessor]
     
     init(
         executor: MLXExecutor,
         constraints: any ConstraintEngine,
         retryPolicy: RetryPolicy = .standard,
-        telemetry: any Telemetry = NoOpTelemetry()
+        telemetry: any Telemetry = NoOpTelemetry(),
+        additionalProcessors: [LogitProcessor] = []
     ) {
         self.executor = executor
         self.constraints = constraints
         self.retryPolicy = retryPolicy
         self.telemetry = telemetry
+        self.additionalProcessors = additionalProcessors
     }
     
     func run(
@@ -45,7 +48,27 @@ struct GenerationPipeline: Sendable {
         }
         await telemetry.event(.constraintsPrepared, metadata: ["mode": constraints.mode.rawValue])
         
-        let processors = await constraints.logitProcessors()
+        let constraintProcessors = await constraints.logitProcessors()
+        
+        // Combine constraint processors with additional processors if any
+        let finalProcessor: LogitProcessor? = {
+            var allProcessors: [LogitProcessor] = []
+            
+            // Add constraint processors
+            allProcessors.append(contentsOf: constraintProcessors)
+            
+            // Add additional processors (like KeyDetectionLogitProcessor)
+            allProcessors.append(contentsOf: additionalProcessors)
+            
+            // Return appropriate processor
+            if allProcessors.isEmpty {
+                return nil
+            } else if allProcessors.count == 1 {
+                return allProcessors.first
+            } else {
+                return ChainedLogitProcessor(processors: allProcessors)
+            }
+        }()
         
         var attempt = 0
         var lastError: Error?
@@ -76,7 +99,7 @@ struct GenerationPipeline: Sendable {
                 let stream = await executor.executeStream(
                     prompt: finalPrompt,
                     parameters: parameters,
-                    logitProcessor: processors.first
+                    logitProcessor: finalProcessor
                 )
                 
                 for try await chunk in stream {

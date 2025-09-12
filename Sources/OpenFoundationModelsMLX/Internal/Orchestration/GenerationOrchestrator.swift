@@ -26,7 +26,8 @@ actor GenerationOrchestrator {
     ///   - maxRetries: Maximum retry attempts (default: 2)
     init(
         executor: MLXExecutor,
-        maxRetries: Int = 2
+        maxRetries: Int = 2,
+        additionalProcessors: [LogitProcessor] = []
     ) {
         self.executor = executor
         self.maxRetries = maxRetries
@@ -36,7 +37,8 @@ actor GenerationOrchestrator {
             executor: executor,
             constraints: AdaptiveConstraintEngine(),
             retryPolicy: RetryPolicy(maxAttempts: maxRetries),
-            telemetry: NoOpTelemetry()
+            telemetry: NoOpTelemetry(),
+            additionalProcessors: additionalProcessors
         )
     }
     

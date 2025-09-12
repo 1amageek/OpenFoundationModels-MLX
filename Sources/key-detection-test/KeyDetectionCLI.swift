@@ -22,6 +22,12 @@ struct KeyDetectionCLI {
             return
         }
         
+        // Test enhanced processor
+        if CommandLine.arguments.contains("--test-enhanced") {
+            testEnhancedProcessor()
+            return
+        }
+        
         print("🔍 JSON Key Detection Test")
         print("=" * 50)
         
