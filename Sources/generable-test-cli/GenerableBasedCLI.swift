@@ -22,9 +22,35 @@ struct PersonProfile {
 
 @main
 struct GenerableBasedCLI {
+    enum ModelChoice {
+        case llama32_3B
+        case gptOSS_20B
+        
+        var modelID: String {
+            switch self {
+            case .llama32_3B:
+                return "mlx-community/Llama-3.2-3B-Instruct-4bit"
+            case .gptOSS_20B:
+                return "lmstudio-community/gpt-oss-20b-MLX-8bit"
+            }
+        }
+        
+        var modelCard: any ModelCard {
+            switch self {
+            case .llama32_3B:
+                return Llama3ModelCard(id: modelID)
+            case .gptOSS_20B:
+                return GPTOSSModelCard(id: modelID)
+            }
+        }
+    }
+    
     static func main() async {
-        // Use lmstudio-community 8-bit version for better quality
-        let modelID = "lmstudio-community/gpt-oss-20b-MLX-8bit"
+        // Model selection - easy to switch between different models
+        let selectedModel = ModelChoice.llama32_3B  // Change this to switch models
+        
+        let modelID = selectedModel.modelID
+        let modelCard = selectedModel.modelCard
         
         print("🚀 Nested Generable Validation Test")
         print("Model: \(modelID)\n")
@@ -37,7 +63,7 @@ struct GenerableBasedCLI {
             let cachedModels = loader.cachedModels()
             if !cachedModels.contains(modelID) {
                 print("Model not cached. Downloading \(modelID)...")
-                print("This is a ~20GB download and may take several minutes.")
+                print("This may take several minutes depending on model size.")
             }
             
             // Create progress object
@@ -62,7 +88,7 @@ struct GenerableBasedCLI {
             // Create language model
             let languageModel = try await MLXLanguageModel(
                 modelContainer: container,
-                card: GPTOSSModelCard(id: modelID)
+                card: modelCard
             )
             
             // Create session

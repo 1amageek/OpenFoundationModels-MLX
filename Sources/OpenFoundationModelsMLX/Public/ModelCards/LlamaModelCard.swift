@@ -40,12 +40,12 @@ public struct LlamaModelCard: ModelCard {
                 
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
-                    "\n\nResponse Format:\n"
-                    "Generate a JSON data instance that conforms to this JSONSchema.\n"
-                    "DO NOT copy the schema structure - create actual data values.\n"
-                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}\n"
-                    "```json\n"
-                    "\(schemaJSON)\n"
+                    "\n\nResponse Format:"
+                    "Generate a JSON data instance that conforms to this JSONSchema."
+                    "DO NOT copy the schema structure - create actual data values."
+                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}"
+                    "```json"
+                    schemaJSON
                     "```"
                 }
                 
@@ -149,12 +149,12 @@ public struct Llama3ModelCard: ModelCard {
                 
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
-                    "\n\nResponse Format:\n"
-                    "Generate a JSON data instance that conforms to this JSONSchema.\n"
-                    "DO NOT copy the schema structure - create actual data values.\n"
-                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}\n"
-                    "```json\n"
-                    "\(schemaJSON)\n"
+                    "\n\nResponse Format:"
+                    "Generate a JSON data instance that conforms to this JSONSchema."
+                    "DO NOT copy the schema structure - create actual data values."
+                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}"
+                    "```json"
+                    schemaJSON
                     "```"
                 }
                 
