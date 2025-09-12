@@ -41,9 +41,15 @@ public struct LlamaModelCard: ModelCard {
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
                     "\n\nResponse Format:"
-                    "Generate a JSON data instance that conforms to this JSONSchema."
-                    "DO NOT copy the schema structure - create actual data values."
-                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}"
+                    "You must generate a JSON object with ACTUAL DATA VALUES."
+                    "The following is a JSON Schema that describes the STRUCTURE your response must follow."
+                    "DO NOT output the schema itself. Generate REAL DATA that matches this structure."
+                    "\n\nIMPORTANT:"
+                    "- For type: \"string\" → generate actual string values like \"John Doe\" or \"example@email.com\""
+                    "- For type: \"integer\" → generate actual numbers like 42 or 2020"
+                    "- For enum values → use one of the allowed values, not \"enum\" or \"type\""
+                    "- DO NOT include \"properties\", \"type\", \"required\" or other schema keywords in your response"
+                    "\n\nSchema to follow:"
                     "```json"
                     schemaJSON
                     "```"
@@ -136,6 +142,9 @@ public struct Llama3ModelCard: ModelCard {
         let messages = ext.messages.filter { $0.role != .system }
         
         return Prompt {
+            // Begin of text marker (required for Llama 3.2)
+            "<|begin_of_text|>"
+            
             // System message
             if ext.systemText != nil || ext.schemaJSON != nil || !ext.toolDefs.isEmpty {
                 "<|start_header_id|>system<|end_header_id|>\n\n"
@@ -149,13 +158,28 @@ public struct Llama3ModelCard: ModelCard {
                 
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
-                    "\n\nResponse Format:"
-                    "Generate a JSON data instance that conforms to this JSONSchema."
-                    "DO NOT copy the schema structure - create actual data values."
-                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}"
-                    "```json"
+                    "\n\nResponse Format:\n"
+                    "You must respond with a JSON object containing ACTUAL DATA.\n\n"
+                    
+                    "CRITICAL INSTRUCTIONS:\n"
+                    "1. Generate REAL DATA VALUES, not the schema structure\n"
+                    "2. DO NOT output \"properties\", \"type\", \"required\", \"enum\" or any schema keywords\n"
+                    "3. Fill in actual values:\n"
+                    "   - Strings: real names, emails, addresses (e.g., \"John Smith\", \"john@example.com\")\n"
+                    "   - Numbers: actual numbers (e.g., 25, 2024, 99.50)\n"
+                    "   - Enums: pick ONE of the allowed values\n"
+                    "   - Arrays: populate with actual items\n\n"
+                    
+                    "Example of WRONG response (DO NOT DO THIS):\n"
+                    "{\"properties\": {\"name\": {\"type\": \"string\"}}}\n\n"
+                    
+                    "Example of CORRECT response:\n"
+                    "{\"name\": \"Alice Johnson\", \"age\": 28}\n\n"
+                    
+                    "Schema structure to follow (generate data matching this structure):\n"
+                    "```json\n"
                     schemaJSON
-                    "```"
+                    "\n```"
                 }
                 
                 // Tool definitions

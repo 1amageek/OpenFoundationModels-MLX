@@ -14,7 +14,7 @@ public struct GPTOSSModelCard: ModelCard {
     
     public var params: GenerateParameters {
         GenerateParameters(
-            maxTokens: 2048,
+            maxTokens: 4096,
             temperature: 0.7,
             topP: 0.95
         )
@@ -28,12 +28,11 @@ public struct GPTOSSModelCard: ModelCard {
         return Prompt {
             // System message
             "<|start|>system<|message|>"
-            "You are ChatGPT, a large language model trained by OpenAI.\n"
+            "You are ChatGPT, a large language model trained by OpenAI."
+            "Please perform the task exactly as instructed by the user."
             "Knowledge cutoff: 2024-06\n"
             "Current date: \(currentDate)\n"
-            
-            
-            
+                                
             "<|end|>"
             
             // Developer message with tools and instructions

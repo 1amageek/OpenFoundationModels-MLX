@@ -131,7 +131,7 @@ struct GenerableBasedCLI {
     
     static func main() async {
         // Model selection - easy to switch between different models
-        let selectedModel = ModelChoice.llama32_3B  // Change this to switch models
+        let selectedModel = ModelChoice.gptOSS_20B  // Change this to switch models
         
         let modelID = selectedModel.modelID
         let modelCard = selectedModel.modelCard
