@@ -47,32 +47,7 @@ public extension Telemetry {
     }
 }
 
-public final class ConsoleTelemetry: Telemetry, @unchecked Sendable {
-    private let verbose: Bool
-    
-    public init(verbose: Bool = false) {
-        self.verbose = verbose
-    }
-    
-    public func event(_ name: TelemetryEvent, metadata: [String: Any]) async {
-        guard verbose else { return }
-        
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        var message = "[\(timestamp)] \(name.rawValue)"
-        
-        if !metadata.isEmpty {
-            let metaString = metadata
-                .sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: ", ")
-            message += " | \(metaString)"
-        }
-        
-        print(message)
-    }
-}
-
-public final class NoOpTelemetry: Telemetry, @unchecked Sendable {
+public final class NoOpTelemetry: Telemetry, Sendable {
     public init() {}
     
     public func event(_ name: TelemetryEvent, metadata: [String: Any]) async {

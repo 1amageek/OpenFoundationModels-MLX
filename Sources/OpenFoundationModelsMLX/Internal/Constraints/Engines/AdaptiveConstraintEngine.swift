@@ -6,7 +6,7 @@ import Synchronization
 
 /// Adaptive constraint engine that selects appropriate constraints based on the request
 /// This ensures all generation (Text/JSON) goes through the same pipeline with observable output
-final class AdaptiveConstraintEngine: ConstraintEngine, @unchecked Sendable {
+final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
     private let mutex = Mutex<State>(.init())
     
     private struct State: Sendable {
@@ -36,15 +36,13 @@ final class AdaptiveConstraintEngine: ConstraintEngine, @unchecked Sendable {
         // Determine mode and additional processors based on schema
         if let schema = schema, !schema.isEmpty {
             // JSON mode with schema constraints
-            // For now, we'll use SimpleJSONLogitProcessor
-            // In the future, this will be replaced with full ADAPT implementation
-            let jsonProcessor = SimpleJSONLogitProcessor()
+            // Future: Add TokenTrieLogitProcessor or other ADAPT implementations here
             
             mutex.withLock {
                 $0.mode = .hard
                 $0.preparedSchema = schema
                 $0.observableProcessor = observableProcessor
-                $0.schemaProcessors = [jsonProcessor]
+                $0.schemaProcessors = [] // Will be populated with ADAPT processors
             }
         } else {
             // Text mode - only observation, no constraints
@@ -67,7 +65,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, @unchecked Sendable {
             var processors: [any LogitProcessor] = []
             
             // Always include ObservableLogitProcessor first
-            if var observable = state.observableProcessor {
+            if let observable = state.observableProcessor {
                 processors.append(observable)
             }
             

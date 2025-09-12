@@ -1,7 +1,7 @@
 import Foundation
 
 /// Shared JSON validator that performs basic JSON validation
-public final class SharedJSONValidator: JSONValidatorProtocol, @unchecked Sendable {
+public final class SharedJSONValidator: JSONValidatorProtocol, Sendable {
     public init() {}
     
     public func validate(_ json: String, schema: SchemaNode?) async -> Result<Void, ValidationError> {

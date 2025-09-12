@@ -12,7 +12,7 @@ struct GenerationPipeline: Sendable {
     
     init(
         executor: MLXExecutor,
-        constraints: any ConstraintEngine = NullConstraintEngine(),
+        constraints: any ConstraintEngine,
         retryPolicy: RetryPolicy = .standard,
         telemetry: any Telemetry = NoOpTelemetry()
     ) {
@@ -113,29 +113,7 @@ struct GenerationPipeline: Sendable {
                             "violations": error.violations.count
                         ])
                         
-                        if constraints.mode == .post,
-                           let engine = constraints as? PostConstraintEngine,
-                           let repairer = engine.repairer() {
-                            
-                            await telemetry.event(.repairAttempted, metadata: [:])
-                            
-                            if let repaired = await repairer.repair(output, error: error, schema: schema) {
-                                switch await validator.validate(repaired, schema: schema) {
-                                case .success:
-                                    await telemetry.event(.repairSucceeded, metadata: [:])
-                                    await telemetry.event(.pipelineCompleted, metadata: ["attempts": attempt])
-                                    return repaired
-                                case .failure:
-                                    await telemetry.event(.repairFailed, metadata: [:])
-                                    lastError = error
-                                }
-                            } else {
-                                await telemetry.event(.repairFailed, metadata: [:])
-                                lastError = error
-                            }
-                        } else {
-                            lastError = error
-                        }
+                        lastError = error
                     }
                 } else {
                     await telemetry.event(.attemptCompleted, metadata: ["attempt": attempt])
@@ -200,19 +178,12 @@ struct GenerationPipeline: Sendable {
                         continuation.yield(chunk)
                     }
                     
-                    if constraints.mode == .post,
-                       let validator = constraints.validator() {
+                    if let validator = constraints.validator() {
                         // Always extract JSON for structured generation
                         let output = extractJSONFromText(buffer)
                         
                         if case .failure(let error) = await validator.validate(output, schema: schema) {
-                            if let engine = constraints as? PostConstraintEngine,
-                               let repairer = engine.repairer(),
-                               let repaired = await repairer.repair(output, error: error, schema: schema) {
-                                continuation.yield(repaired)
-                            } else {
-                                throw error
-                            }
+                            throw error
                         }
                     }
                     
