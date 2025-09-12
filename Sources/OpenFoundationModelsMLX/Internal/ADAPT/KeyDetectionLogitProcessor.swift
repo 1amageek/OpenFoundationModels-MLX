@@ -91,7 +91,9 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         // Build and store current logit info for next iteration
         let currentInfo = buildLogitInfo(from: logits, step: stepCount + 1)
         pendingLogitInfo = currentInfo
-        wasInKeyGeneration = stateMachine.isInKeyGeneration
+        
+        // Note: We'll update wasInKeyGeneration in didSample AFTER processing the token
+        // This ensures we check the state after JSONExtractor has had a chance to find JSON
         
         // This processor only observes, doesn't modify logits
         return logits
@@ -108,6 +110,13 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         
         // Process each character through the JSON extractor first
         for char in text {
+            // Check if JSONStateMachine needs reset (done or error state)
+            if stateMachine.phase == .done || stateMachine.phase == .error {
+                // Reset both to prepare for new JSON
+                jsonExtractor.reset()
+                stateMachine.reset()
+            }
+            
             // Use JSONExtractor to find JSON content
             let shouldProcess = jsonExtractor.processCharacter(char)
             
@@ -171,6 +180,10 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
                 print("   Output: \(String(generatedText.suffix(50)))")
             }
         }
+        
+        // Update key generation state after processing the token
+        // This ensures we check the state after JSONExtractor has had a chance to find JSON
+        wasInKeyGeneration = jsonExtractor.isInJSON && stateMachine.isInKeyGeneration
     }
     
     // MARK: - Private Methods

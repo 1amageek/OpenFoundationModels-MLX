@@ -46,12 +46,6 @@ public struct JSONExtractor: Sendable {
                 jsonFound = true
                 return true
                 
-            case "-", "0"..."9":
-                // Could be start of a number
-                state = .inJSON
-                jsonFound = true
-                return true
-                
             case "t", "f", "n":
                 // Could be start of true, false, or null
                 literalBuffer.append(char)
