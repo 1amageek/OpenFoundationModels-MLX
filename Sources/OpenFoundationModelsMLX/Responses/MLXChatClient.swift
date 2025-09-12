@@ -29,33 +29,52 @@ struct MLXChatClient: Sendable {
     }
 
     func create(_ req: Request) async throws -> ChatResponse {
-        let engine = MLXChatEngine(backend: backend)
-        return try await engine.generate(ChatRequest(
-            modelID: req.card.id, 
+        let schemaJSON: String? = {
+            if case .jsonSchema(let json) = req.responseFormat {
+                return json
+            }
+            return nil
+        }()
+        
+        let text = try await backend.orchestratedGenerate(
             prompt: req.prompt,
-            responseFormat: req.responseFormat, 
-            sampling: req.sampling, 
-            schema: req.schema, 
-            parameters: nil
-        ))
+            sampling: req.sampling,
+            schema: req.schema,
+            schemaJSON: schemaJSON
+        )
+        
+        let choice = ChatChoice(content: text, finishReason: "stop")
+        return ChatResponse(
+            choices: [choice],
+            usage: .init(promptTokens: 0, completionTokens: 0),
+            meta: .init()
+        )
     }
 
     func createStream(_ req: Request) -> AsyncThrowingStream<ChatChunk, Error> {
         return AsyncThrowingStream { continuation in
             Task {
-                let engine = MLXChatEngine(backend: backend)
-                let stream = await engine.stream(ChatRequest(
-                    modelID: req.card.id, 
+                let schemaJSON: String? = {
+                    if case .jsonSchema(let json) = req.responseFormat {
+                        return json
+                    }
+                    return nil
+                }()
+                
+                let stream = await backend.orchestratedStream(
                     prompt: req.prompt,
-                    responseFormat: req.responseFormat, 
-                    sampling: req.sampling, 
-                    schema: req.schema, 
-                    parameters: nil
-                ))
+                    sampling: req.sampling,
+                    schema: req.schema,
+                    schemaJSON: schemaJSON
+                )
+                
                 do {
-                    for try await chunk in stream {
+                    for try await text in stream {
+                        let chunk = ChatChunk(deltas: [.init(deltaText: text, finishReason: nil)])
                         continuation.yield(chunk)
                     }
+                    let finalChunk = ChatChunk(deltas: [.init(deltaText: nil, finishReason: "stop")])
+                    continuation.yield(finalChunk)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

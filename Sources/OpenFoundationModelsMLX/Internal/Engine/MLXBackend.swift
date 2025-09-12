@@ -4,8 +4,7 @@ import MLXLMCommon
 public actor MLXBackend {
     
     
-    private let executor: MLXExecutor
-    private let adaptEngine: ADAPTEngine
+    let executor: MLXExecutor
     private let orchestrator: GenerationOrchestrator
     
     
@@ -26,10 +25,8 @@ public actor MLXBackend {
     
     public init() {
         self.executor = MLXExecutor()
-        self.adaptEngine = ADAPTEngine()
         self.orchestrator = GenerationOrchestrator(
-            executor: executor,
-            adaptEngine: adaptEngine
+            executor: executor
         )
     }
     
@@ -61,16 +58,30 @@ public actor MLXBackend {
             throw MLXBackendError.noModelSet
         }
         
-        let modelID = await currentModel() ?? "unknown"
+        // Determine response format
         let responseFormat: ResponseFormatSpec
         if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
             responseFormat = .jsonSchema(schemaJSON: schemaJSON)
-        } else if schema != nil {
-            responseFormat = .jsonSchema(schemaJSON: "{}")
         } else {
             responseFormat = .text
         }
         
+        // For text mode, bypass the pipeline and execute directly
+        if case .text = responseFormat {
+            let params = GenerateParameters(
+                maxTokens: sampling.maxTokens ?? 1024,
+                temperature: Float(sampling.temperature ?? 0.7),
+                topP: Float(sampling.topP ?? 1.0)
+            )
+            return try await executor.execute(
+                prompt: prompt,
+                parameters: params,
+                logitProcessor: nil
+            )
+        }
+        
+        // For JSON schema mode, use the pipeline
+        let modelID = await currentModel() ?? "unknown"
         let req = ChatRequest(
             modelID: modelID,
             prompt: prompt,
@@ -103,16 +114,38 @@ public actor MLXBackend {
                     
                     try Task.checkCancellation()
                     
-                    let modelID = await currentModel() ?? "unknown"
+                    // Determine response format
                     let responseFormat: ResponseFormatSpec
                     if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
                         responseFormat = .jsonSchema(schemaJSON: schemaJSON)
-                    } else if schema != nil {
-                                responseFormat = .jsonSchema(schemaJSON: "{}")
                     } else {
                         responseFormat = .text
                     }
                     
+                    // For text mode, bypass the pipeline and stream directly
+                    if case .text = responseFormat {
+                        let params = GenerateParameters(
+                            maxTokens: sampling.maxTokens ?? 1024,
+                            temperature: Float(sampling.temperature ?? 0.7),
+                            topP: Float(sampling.topP ?? 1.0)
+                        )
+                        
+                        let directStream = await executor.executeStream(
+                            prompt: prompt,
+                            parameters: params,
+                            logitProcessor: nil
+                        )
+                        
+                        for try await text in directStream {
+                            try Task.checkCancellation()
+                            continuation.yield(text)
+                        }
+                        continuation.finish()
+                        return
+                    }
+                    
+                    // For JSON schema mode, use the pipeline
+                    let modelID = await currentModel() ?? "unknown"
                     let req = ChatRequest(
                         modelID: modelID,
                         prompt: prompt,

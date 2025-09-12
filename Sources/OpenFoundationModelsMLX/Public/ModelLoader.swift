@@ -85,7 +85,7 @@ public final class ModelLoader {
     }
     
     public func clearCache(for modelID: String) {
-        cacheQueue.sync {
+        _ = cacheQueue.sync {
             modelCache.removeValue(forKey: modelID)
         }
     }

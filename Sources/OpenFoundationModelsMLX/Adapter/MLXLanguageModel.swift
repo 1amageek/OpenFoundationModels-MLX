@@ -9,7 +9,7 @@ import MLXLMCommon
 /// pre-loaded models and does NOT handle model loading.
 public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     private let card: any ModelCard
-    private let engine: MLXChatEngine
+    private let backend: MLXBackend
 
     /// Initialize with a pre-loaded ModelContainer and ModelCard.
     /// The model must be loaded separately using ModelLoader.
@@ -21,8 +21,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         
         let backend = MLXBackend()
         await backend.setModel(modelContainer, modelID: card.id)
-        
-        self.engine = MLXChatEngine(backend: backend)
+        self.backend = backend
     }
     
     /// Convenience initializer when you have a pre-configured backend
@@ -31,7 +30,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     ///   - card: ModelCard that defines prompt rendering and parameters
     public init(backend: MLXBackend, card: any ModelCard) {
         self.card = card
-        self.engine = MLXChatEngine(backend: backend)
+        self.backend = backend
     }
 
     public var isAvailable: Bool { true }
@@ -92,8 +91,25 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         )
         
         do {
-            let res = try await engine.generate(req)
-            if let text = res.choices.first?.content {
+            let res = try await backend.orchestratedGenerate(
+                prompt: req.prompt,
+                sampling: req.sampling,
+                schema: req.schema,
+                schemaJSON: {
+                    if case .jsonSchema(let json) = req.responseFormat {
+                        return json
+                    }
+                    return nil
+                }()
+            )
+            
+            let choice = ChatChoice(content: res, finishReason: "stop")
+            let response = ChatResponse(
+                choices: [choice],
+                usage: .init(promptTokens: 0, completionTokens: 0),
+                meta: .init()
+            )
+            if let text = response.choices.first?.content {
                 if let entry = ToolCallDetector.entryIfPresent(text) {
                     return entry
                 }
@@ -167,15 +183,26 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 do {
                     try Task.checkCancellation()
                     
-                    let stream = await engine.stream(req)
+                    let schemaJSON: String? = {
+                        if case .jsonSchema(let json) = req.responseFormat {
+                            return json
+                        }
+                        return nil
+                    }()
+                    
+                    let stream = await backend.orchestratedStream(
+                        prompt: req.prompt,
+                        sampling: req.sampling,
+                        schema: req.schema,
+                        schemaJSON: schemaJSON
+                    )
                     var buffer = ""
                     var emittedToolCalls = false
                     
-                    for try await chunk in stream {
+                    for try await text in stream {
                         try Task.checkCancellation()
                         
-                        for delta in chunk.deltas {
-                            if let text = delta.deltaText, !text.isEmpty {
+                        if !text.isEmpty {
                                 if expectsTool {
                                     buffer += text
                                     let bufferLimitBytes = 2 * 1024 * 1024
@@ -198,10 +225,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                                 } else {
                                     continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: text))])))
                                 }
-                            }
-                            if let reason = delta.finishReason, !reason.isEmpty {
-                                _ = reason
-                            }
                         }
                     }
                     

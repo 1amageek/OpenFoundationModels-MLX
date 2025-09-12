@@ -8,7 +8,7 @@ import Tokenizers
 /// It handles pure model execution without any business logic, validation, or constraints.
 /// This actor is responsible only for running the model and returning raw results.
 public actor MLXExecutor {
-    private var modelContainer: ModelContainer?
+    var modelContainer: ModelContainer?
     private var modelID: String?
     
     public enum ExecutorError: LocalizedError {
@@ -92,31 +92,16 @@ public actor MLXExecutor {
                     iterator: iterator
                 )
                 
-                if let errorCheckable = processor as? ErrorCheckable {
-                    let abortor = AbortableGenerator(processor: errorCheckable)
-                    let stream = abortor.generate(baseStream: baseStream)
-                    var result = ""
-                    for try await generation in stream {
-                        switch generation {
-                        case .chunk(let text):
-                            result += text
-                        case .info, .toolCall:
-                            break
-                        }
+                var result = ""
+                for await generation in baseStream {
+                    switch generation {
+                    case .chunk(let text):
+                        result += text
+                    case .info, .toolCall:
+                        break
                     }
-                    return result
-                } else {
-                    var result = ""
-                    for await generation in baseStream {
-                        switch generation {
-                        case .chunk(let text):
-                            result += text
-                        case .info, .toolCall:
-                            break
-                        }
-                    }
-                    return result
                 }
+                return result
             } else {
                 let output = try MLXLMCommon.generate(
                     input: input,
@@ -145,7 +130,7 @@ public actor MLXExecutor {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    print("🔥 [DEBUG] MLXExecutor.executeStream: Task started")
+                    Logger.debug("[MLXExecutor] executeStream: Task started")
                     try Task.checkCancellation()
                     guard let container = modelContainer else {
                         throw ExecutorError.noModelSet
@@ -158,7 +143,7 @@ public actor MLXExecutor {
                     
                     try await container.perform { (context: ModelContext) async throws in
                         try Task.checkCancellation()
-                        print("🔥 [DEBUG] MLXExecutor: Starting stream processing")
+                        Logger.debug("[MLXExecutor] Starting stream processing")
                         let userInput = UserInput(prompt: .text(prompt))
                         let input = try await context.processor.prepare(input: userInput)
                         
@@ -182,25 +167,20 @@ public actor MLXExecutor {
                                 iterator: iterator
                             )
                             
-                            if let errorCheckable = processor as? ErrorCheckable {
-                                let abortor = AbortableGenerator(processor: errorCheckable)
-                                stream = abortor.generate(baseStream: baseStream)
-                            } else {
-                                stream = AsyncThrowingStream { continuation in
-                                    let innerTask = Task {
-                                        do {
-                                            for await generation in baseStream {
-                                                try Task.checkCancellation()
-                                                continuation.yield(generation)
-                                            }
-                                            continuation.finish()
-                                        } catch {
-                                            continuation.finish(throwing: error)
+                            stream = AsyncThrowingStream { continuation in
+                                let innerTask = Task {
+                                    do {
+                                        for await generation in baseStream {
+                                            try Task.checkCancellation()
+                                            continuation.yield(generation)
                                         }
+                                        continuation.finish()
+                                    } catch {
+                                        continuation.finish(throwing: error)
                                     }
-                                    continuation.onTermination = { _ in
-                                        innerTask.cancel()
-                                    }
+                                }
+                                continuation.onTermination = { _ in
+                                    innerTask.cancel()
                                 }
                             }
                         } else {
@@ -237,25 +217,22 @@ public actor MLXExecutor {
                             }
                         }
                         
-                        print("🔥 [DEBUG] MLXExecutor: Stream processing completed")
+                        Logger.debug("[MLXExecutor] Stream processing completed")
                         continuation.finish()
                     }
                 } catch is CancellationError {
-                    print("🔥 [DEBUG] MLXExecutor.executeStream: Task cancelled")
+                    Logger.debug("[MLXExecutor] executeStream: Task cancelled")
                     Stream().synchronize()
                     continuation.finish(throwing: CancellationError())
                 } catch {
-                    print("🔥 [DEBUG] MLXExecutor.executeStream: Error at \(Date()): \(error)")
-                    print("🔥 [DEBUG] MLXExecutor.executeStream: Force synchronizing MLX operations")
+                    Logger.debug("[MLXExecutor] executeStream: Error - \(error)")
                     Stream().synchronize()
-                    print("🔥 [DEBUG] MLXExecutor.executeStream: Finishing continuation with error")
                     continuation.finish(throwing: error)
-                    print("🔥 [DEBUG] MLXExecutor.executeStream: Continuation finished")
                 }
             }
             
             continuation.onTermination = { @Sendable _ in
-                print("🔥 [DEBUG] MLXExecutor.executeStream: onTermination called, cancelling task")
+                Logger.debug("[MLXExecutor] executeStream: onTermination called")
                 task.cancel()
             }
         }

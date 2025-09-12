@@ -3,396 +3,155 @@ import OpenFoundationModels
 import OpenFoundationModelsExtra
 import OpenFoundationModelsMacros
 import OpenFoundationModelsMLX
-import MLXLMCommon
 import MLX
 
-// Complex hierarchical JSON structure for a company
+// Simple blog post with nested author
 @Generable
-struct Company {
-    var name: String
-    var founded: Int
-    var headquarters: Address
-    var employees: Int
-    var revenue: Revenue?
-    var departments: [Department]
-    var products: [Product]?
-    var partnerships: [Partnership]?
+struct BlogPost {
+    var title: String
+    var content: String
+    var author: Author
+    var tags: [String]
     
     @Generable
-    struct Address {
-        var street: String
-        var city: String
-        var state: String
-        var country: String
-        var postalCode: String
-        var coordinates: Coordinates?
-        
-        @Generable
-        struct Coordinates {
-            var latitude: Double
-            var longitude: Double
-        }
-    }
-    
-    @Generable
-    struct Revenue {
-        var annual: Double
-        var currency: String
-        var fiscalYear: Int
-        var quarters: [QuarterlyRevenue]?
-        
-        @Generable
-        struct QuarterlyRevenue {
-            var quarter: String
-            var amount: Double
-            var growth: Double?
-        }
-    }
-    
-    @Generable
-    struct Department {
+    struct Author {
         var name: String
-        var headCount: Int
-        var budget: Double?
-        var lead: Employee
-        var teams: [Team]?
-        
-        @Generable
-        struct Employee {
-            var id: String
-            var name: String
-            var title: String
-            var email: String
-            var yearsAtCompany: Int?
-            var skills: [String]?
-        }
-        
-        @Generable
-        struct Team {
-            var name: String
-            var size: Int
-            var focus: String
-            var projects: [String]?
-        }
+        var email: String
     }
+}
+
+// Simple order with nested items
+@Generable
+struct Order {
+    var orderId: Int
+    var customerName: String
+    var items: [OrderItem]
+    var total: Double
     
     @Generable
-    struct Product {
+    struct OrderItem {
         var name: String
-        var category: String
-        var price: Double?
-        var launched: String?
-        var features: [String]?
-        var metrics: ProductMetrics?
-        
-        @Generable
-        struct ProductMetrics {
-            var users: Int
-            var rating: Double?
-            var reviews: Int?
-            var marketShare: Double?
-        }
-    }
-    
-    @Generable
-    struct Partnership {
-        var partnerName: String
-        var type: String
-        var since: String
-        var value: Double?
-        var status: String
+        var price: Double
+        var quantity: Int
     }
 }
 
 @main
-struct ComplexJSONGeneratorCLI {
+struct GenerableBasedCLI {
     static func main() async {
-        let model = "mlx-community/Llama-3.2-3B-Instruct"
+        // Use lmstudio-community 8-bit version for better quality
+        let modelID = "lmstudio-community/gpt-oss-20b-MLX-8bit"
         
-        print("🏢 Complex JSON Generation Test")
-        print("=" * 50)
-        print("Model: \(model)")
-        print("Structure: Hierarchical Company Organization")
-        print("=" * 50)
-        print()
+        print("🚀 JSON Generation Demo")
+        print("Model: \(modelID)\n")
         
         do {
-            try await runComplexJSONTest(model: model)
-        } catch {
-            print("❌ Fatal Error: \(error)")
-            print("Error Type: \(type(of: error))")
-            if let localizedError = error as? LocalizedError {
-                if let description = localizedError.errorDescription {
-                    print("Description: \(description)")
-                }
-                if let reason = localizedError.failureReason {
-                    print("Reason: \(reason)")
-                }
-            }
-        }
-        
-        // Always synchronize MLX tasks before program exit
-        print("🏁 [DEBUG] main: About to call Stream().synchronize() at \(Date())")
-        Stream().synchronize()
-        print("🏁 [DEBUG] main: Stream().synchronize() completed")
-        
-        print("🏁 [DEBUG] main: About to exit program")
-    }
-    
-    static func runComplexJSONTest(model: String) async throws {
-        // Ensure MLX tasks are synchronized when exiting this function
-        defer {
-            print("🔄 [DEBUG] defer: About to call Stream().synchronize() at \(Date())")
-            Stream().synchronize()
-            print("🔄 [DEBUG] defer: Stream().synchronize() completed")
-        }
-        
-        print("📦 Loading Model...")
-        let loader = ModelLoader()
-        let progress = Progress(totalUnitCount: 100)
-        
-        let progressTask = Task {
-            var lastPercentage = 0
-            while progress.fractionCompleted < 1.0 {
-                let percentage = Int(progress.fractionCompleted * 100)
-                if percentage != lastPercentage {
-                    print("\r⏳ Progress: [\(String(repeating: "█", count: percentage/2))\(String(repeating: "░", count: 50-percentage/2))] \(percentage)%", terminator: "")
-                    fflush(stdout)
-                    lastPercentage = percentage
-                }
-                // Progress update removed - not essential
-            }
-            print("\r✅ Model Loaded Successfully!" + String(repeating: " ", count: 40))
-        }
-        
-        let modelContainer = try await loader.loadModel(model, progress: progress)
-        progressTask.cancel()
-        
-        let card = LlamaModelCard(id: model)
-        let languageModel = try await MLXLanguageModel(
-            modelContainer: modelContainer,
-            card: card
-        )
-        
-        let systemInstructions = """
-        You are a data generation assistant that creates realistic and detailed JSON objects for companies.
-        
-        CRITICAL REQUIREMENTS:
-        1. Generate a complete JSON DATA OBJECT with realistic values
-        2. Do NOT generate JSON schemas or use schema keywords like "type", "properties", "required"
-        3. All values must be realistic and internally consistent
-        4. The JSON must be valid and properly formatted
-        5. Start with { and end with } without any additional text
-        
-        STRUCTURE REQUIREMENTS:
-        - Company must have multiple departments (at least 3)
-        - Each department must have a lead employee with complete information
-        - Include detailed address with coordinates
-        - Revenue should include quarterly breakdowns
-        - Products should have metrics
-        - All optional fields should be populated when sensible
-        
-        VALUE GUIDELINES:
-        - Use realistic company names (tech companies preferred)
-        - Founded year: 1975-2023
-        - Employee count: 100-100000
-        - Revenue in millions/billions USD
-        - Coordinates should be valid lat/long
-        - Email addresses should follow standard format
-        - Dates in ISO format (YYYY-MM-DD)
-        """
-        
-        let session = LanguageModelSession(
-            model: languageModel,
-            instructions: systemInstructions
-        )
-        
-        print("\n🎯 Test Configuration:")
-        print("├── Structure: Company (with nested objects)")
-        print("├── Depth: Up to 4 levels")
-        print("├── Arrays: departments, products, teams, features")
-        print("├── Optional fields: Multiple at each level")
-        print("└── Total fields: ~40+ possible fields")
-        print()
-        
-        // Generate multiple examples to test consistency
-        let prompts = [
-            "Generate a detailed company profile for a successful AI technology company based in Silicon Valley with at least 4 departments, multiple products, and recent partnerships.",
-            "Create a comprehensive company profile for a renewable energy corporation with global operations, including financial data and organizational structure.",
-            "Produce a complete company profile for a biotechnology firm with research departments, product pipeline, and strategic partnerships."
-        ]
-        
-        for (index, prompt) in prompts.enumerated() {
-            print("\n" + "=" * 60)
-            print("📊 Test Case \(index + 1) of \(prompts.count)")
-            print("=" * 60)
-            print("Prompt: \(prompt)")
-            print()
+            print("📦 Loading model...")
+            let loader = ModelLoader()
             
-            do {
-                // Measure generation time
-                let startTime = Date()
-                
-                print("🔄 Generating complex JSON structure...")
-                let response = try await session.respond(
-                    to: prompt,
-                    generating: Company.self
-                )
-                
-                let generationTime = Date().timeIntervalSince(startTime)
-                print("⏱️ Generation completed in \(String(format: "%.2f", generationTime)) seconds")
-                
-                let company = response.content
-                
-                // Display summary statistics
-                print("\n📈 Generated Structure Summary:")
-                print("├── Company: \(company.name)")
-                print("├── Founded: \(company.founded)")
-                print("├── Employees: \(company.employees)")
-                print("├── Departments: \(company.departments.count)")
-                if let products = company.products {
-                    print("├── Products: \(products.count)")
-                }
-                if let partnerships = company.partnerships {
-                    print("├── Partnerships: \(partnerships.count)")
-                }
-                print("└── Location: \(company.headquarters.city), \(company.headquarters.country)")
-                
-                // Detailed department breakdown
-                print("\n🏢 Department Details:")
-                for dept in company.departments {
-                    print("  ├── \(dept.name)")
-                    print("  │   ├── Head Count: \(dept.headCount)")
-                    print("  │   ├── Lead: \(dept.lead.name) (\(dept.lead.title))")
-                    if let teams = dept.teams {
-                        print("  │   └── Teams: \(teams.count)")
-                    }
-                }
-                
-                // Convert to JSON and display
-                print("\n📄 Generated JSON (truncated preview):")
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                if let jsonData = try? encoder.encode(company),
-                   let jsonString = String(data: jsonData, encoding: .utf8) {
-                    // Show first 1000 characters for preview
-                    let preview = String(jsonString.prefix(1000))
-                    print(preview)
-                    if jsonString.count > 1000 {
-                        print("... [\(jsonString.count - 1000) more characters]")
+            // Check if model needs to be downloaded
+            let cachedModels = loader.cachedModels()
+            if !cachedModels.contains(modelID) {
+                print("Model not cached. Downloading \(modelID)...")
+                print("This is a ~20GB download and may take several minutes.")
+            }
+            
+            // Create progress object
+            let progress = Progress(totalUnitCount: 100)
+            
+            // Start a task to monitor progress
+            let progressTask = Task {
+                while !Task.isCancelled && !progress.isFinished {
+                    let percentage = Int(progress.fractionCompleted * 100)
+                    let completed = progress.completedUnitCount
+                    let total = progress.totalUnitCount
+                    
+                    if total > 0 {
+                        print("\rProgress: \(percentage)% (\(completed)/\(total))", terminator: "")
+                        fflush(stdout)
+                    } else {
+                        print("\rProgress: \(percentage)%", terminator: "")
+                        fflush(stdout)
                     }
                     
-                    // Calculate JSON size
-                    let sizeKB = Double(jsonData.count) / 1024.0
-                    print("\n📏 JSON Size: \(String(format: "%.2f", sizeKB)) KB")
+                    try? await Task.sleep(nanoseconds: 500_000_000) // Update every 0.5 seconds
                 }
-                
-                // Validate the generated data
-                let validationResult = validateCompany(company)
-                print("\n✅ Validation: \(validationResult.passed ? "PASSED" : "FAILED")")
-                if !validationResult.errors.isEmpty {
-                    print("Issues found:")
-                    for error in validationResult.errors {
-                        print("  ⚠️ \(error)")
-                    }
-                }
-                
-            } catch {
-                print("❌ [DEBUG] Generation failed at \(Date()): \(error)")
-                print("❌ [DEBUG] About to call Stream().synchronize() after error")
-                Stream().synchronize()
-                print("❌ [DEBUG] Stream().synchronize() completed after error")
-                continue
             }
+            
+            // Load model with progress
+            let container = try await loader.loadModel(modelID, progress: progress)
+            
+            // Cancel progress monitoring
+            progressTask.cancel()
+            
+            print("\n✅ Model loaded\n")
+            
+            // Create language model
+            let languageModel = try await MLXLanguageModel(
+                modelContainer: container,
+                card: GPTOSSModelCard(id: modelID)
+            )
+            
+            // Create session
+            let session = LanguageModelSession(
+                model: languageModel,
+                instructions: "Generate realistic JSON data. Be concise and accurate."
+            )
+            
+            // Test 1: Blog post with nested author
+            print("--- Test 1: Blog Post ---")
+            print("Generating blog post...")
+            
+            let post = try await session.respond(
+                to: "Generate a blog post about AI technology",
+                generating: BlogPost.self
+            ).content
+            
+            print("✅ Generated Blog Post:")
+            print("  Title: \(post.title)")
+            print("  Author: \(post.author.name) (\(post.author.email))")
+            print("  Tags: \(post.tags.joined(separator: ", "))")
+            print("  Content: \(String(post.content.prefix(100)))...")
+            
+            // Test 2: Order with nested items
+            print("\n--- Test 2: Order ---")
+            print("Generating order...")
+            
+            let order = try await session.respond(
+                to: "Generate an order for electronics with 3 items",
+                generating: Order.self
+            ).content
+            
+            print("✅ Generated Order #\(order.orderId):")
+            print("  Customer: \(order.customerName)")
+            print("  Items:")
+            for item in order.items {
+                print("    - \(item.name): $\(item.price) x \(item.quantity)")
+            }
+            print("  Total: $\(order.total)")
+            
+            // Show JSON
+            print("\n--- JSON Preview ---")
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            if let jsonData = try? encoder.encode(post),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                print(String(jsonString.prefix(300)))
+                print("...")
+            }
+            
+            print("\n🎉 Tests completed!")
+            
+        } catch {
+            print("❌ Error: \(error)")
         }
         
-        print("\n" + "=" * 60)
-        print("🎉 Complex JSON Generation Test Completed!")
-        print("=" * 60)
-        
-        print("📍 [DEBUG] About to call final Stream().synchronize() at \(Date())")
-        // Synchronize with MLX background tasks to prevent crash on exit
-        // TokenIterator uses asyncEval() which may have tasks still executing
         Stream().synchronize()
-        print("📍 [DEBUG] Final Stream().synchronize() completed")
-    }
-    
-    static func validateCompany(_ company: Company) -> (passed: Bool, errors: [String]) {
-        var errors: [String] = []
-        
-        // Basic field validation
-        if company.name.isEmpty {
-            errors.append("Company name is empty")
-        }
-        
-        if company.founded < 1800 || company.founded > 2024 {
-            errors.append("Founded year \(company.founded) is unrealistic")
-        }
-        
-        if company.employees < 1 {
-            errors.append("Employee count must be positive")
-        }
-        
-        if company.departments.isEmpty {
-            errors.append("Company must have at least one department")
-        }
-        
-        for dept in company.departments {
-            if dept.name.isEmpty {
-                errors.append("Department name is empty")
-            }
-            if dept.headCount < 1 {
-                errors.append("Department \(dept.name) has invalid headcount")
-            }
-            if dept.lead.email.isEmpty || !dept.lead.email.contains("@") {
-                errors.append("Invalid email for \(dept.lead.name)")
-            }
-        }
-        
-        if company.headquarters.city.isEmpty || company.headquarters.country.isEmpty {
-            errors.append("Incomplete headquarters address")
-        }
-        
-        if let coords = company.headquarters.coordinates {
-            if coords.latitude < -90 || coords.latitude > 90 {
-                errors.append("Invalid latitude: \(coords.latitude)")
-            }
-            if coords.longitude < -180 || coords.longitude > 180 {
-                errors.append("Invalid longitude: \(coords.longitude)")
-            }
-        }
-        
-        if let revenue = company.revenue {
-            if revenue.annual <= 0 {
-                errors.append("Annual revenue must be positive")
-            }
-            if let quarters = revenue.quarters {
-                for quarter in quarters {
-                    if quarter.amount < 0 {
-                        errors.append("Negative quarterly revenue in \(quarter.quarter)")
-                    }
-                }
-            }
-        }
-        
-        return (errors.isEmpty, errors)
     }
 }
 
-extension String {
-    static func *(lhs: String, rhs: Int) -> String {
-        return String(repeating: lhs, count: rhs)
-    }
-}
-
-extension Company: Encodable {}
-extension Company.Address: Encodable {}
-extension Company.Address.Coordinates: Encodable {}
-extension Company.Revenue: Encodable {}
-extension Company.Revenue.QuarterlyRevenue: Encodable {}
-extension Company.Department: Encodable {}
-extension Company.Department.Employee: Encodable {}
-extension Company.Department.Team: Encodable {}
-extension Company.Product: Encodable {}
-extension Company.Product.ProductMetrics: Encodable {}
-extension Company.Partnership: Encodable {}
+// Make structs Encodable for JSON output
+extension BlogPost: Encodable {}
+extension BlogPost.Author: Encodable {}
+extension Order: Encodable {}
+extension Order.OrderItem: Encodable {}
