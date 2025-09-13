@@ -2,6 +2,12 @@ import Foundation
 import MLXLMCommon
 import MLXLLM
 import Tokenizers
+import OpenFoundationModels
+
+/// Errors specific to the generation pipeline
+enum GenerationPipelineError: Error {
+    case missingModelCard
+}
 
 struct GenerationPipeline: Sendable {
     
@@ -113,8 +119,29 @@ struct GenerationPipeline: Sendable {
                 Logger.info(raw)
                 Logger.info("========== END OUTPUT ==========")
                 
-                // Return raw output as-is
-                let output = raw
+                // ModelCard is required for proper output processing
+                guard let card = modelCard else {
+                    throw GenerationPipelineError.missingModelCard
+                }
+                
+                // Process output through ModelCard to extract final content
+                let entry = card.generate(from: raw, options: nil)
+                let output: String = {
+                    switch entry {
+                    case .response(let response):
+                        return response.segments.compactMap { segment in
+                            if case .text(let text) = segment {
+                                return text.content
+                            }
+                            return nil
+                        }.joined()
+                    default:
+                        // For non-response entries, return raw
+                        return raw
+                    }
+                }()
+                
+                Logger.info("[GenerationPipeline] Extracted output from ModelCard: \(output)")
                 
                 if let validator = constraints.validator() {
                     await telemetry.event(.validationStarted, metadata: [:])
@@ -172,6 +199,11 @@ struct GenerationPipeline: Sendable {
                         "streaming": true
                     ])
                     
+                    // ModelCard is required for proper output processing
+                    guard let card = modelCard else {
+                        throw GenerationPipelineError.missingModelCard
+                    }
+                    
                     var finalPrompt = prompt
                     
                     if constraints.mode == .soft, let softPrompt = constraints.softPrompt(for: schema) {
@@ -180,7 +212,7 @@ struct GenerationPipeline: Sendable {
                     
                     // Always prepare constraints to enable observation for all modes
                     try await executor.withTokenizer { tokenizer in
-                        try await constraints.prepare(schema: schema, tokenizer: tokenizer, modelCard: modelCard)
+                        try await constraints.prepare(schema: schema, tokenizer: tokenizer, modelCard: card)
                     }
                     
                     let processors = await constraints.logitProcessors()
@@ -199,8 +231,25 @@ struct GenerationPipeline: Sendable {
                     }
                     
                     if let validator = constraints.validator() {
-                        // Validate the raw buffer directly
-                        if case .failure(let error) = await validator.validate(buffer, schema: schema) {
+                        // Process buffer through ModelCard to extract final content
+                        let entry = card.generate(from: buffer, options: nil)
+                        let output: String = {
+                            switch entry {
+                            case .response(let response):
+                                return response.segments.compactMap { segment in
+                                    if case .text(let text) = segment {
+                                        return text.content
+                                    }
+                                    return nil
+                                }.joined()
+                            default:
+                                // For non-response entries, return buffer
+                                return buffer
+                            }
+                        }()
+                        
+                        // Validate the extracted output
+                        if case .failure(let error) = await validator.validate(output, schema: schema) {
                             throw error
                         }
                     }

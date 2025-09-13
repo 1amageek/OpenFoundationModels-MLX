@@ -235,18 +235,55 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
            case .inObject(.expectKeyOrEnd) = stateMachine.phase {
             // Entered a nested object after a key
             if let lastKey = detectedKeys.last {
-                nestingStack.append(lastKey)
-                if verbose {
-                    print("[KeyDetection] 📂 Entering object: \(lastKey)")
+                // Check if we're already in an array context
+                if let currentContext = nestingStack.last, currentContext.hasSuffix("[]") {
+                    // We're in an array, so this is a nested object within array item
+                    let nestedContext = "\(currentContext).\(lastKey)"
+                    nestingStack.append(nestedContext)
+                    if verbose {
+                        print("[KeyDetection] 📂 Entering nested object in array: \(nestedContext)")
+                    }
+                } else {
+                    nestingStack.append(lastKey)
+                    if verbose {
+                        print("[KeyDetection] 📂 Entering object: \(lastKey)")
+                    }
                 }
             }
         }
         
-        // Check if we exited an object
+        // Check if we entered an array
+        if case .inObject(.expectValue) = previousPhase,
+           case .inArray(.expectValue) = stateMachine.phase {
+            // Entered an array after a key
+            if let lastKey = detectedKeys.last {
+                // Use array notation for context
+                let arrayContext = "\(lastKey)[]"
+                nestingStack.append(arrayContext)
+                if verbose {
+                    print("[KeyDetection] 📋 Entering array: \(arrayContext)")
+                }
+            }
+        }
+        
+        // Check if we're in an array and entering an object
+        if case .inArray(.expectValue) = previousPhase,
+           case .inObject(.expectKeyOrEnd) = stateMachine.phase {
+            // Entering object within array - context already set with [] notation
+            if verbose, let currentContext = nestingStack.last {
+                print("[KeyDetection] 📂 Entering array item object in: \(currentContext)")
+            }
+        }
+        
+        // Check if we exited an object or array
         if stateMachine.nestingLevel < nestingStack.count {
             if let exitedContext = nestingStack.popLast() {
                 if verbose {
-                    print("[KeyDetection] 📁 Exiting object: \(exitedContext)")
+                    if exitedContext.hasSuffix("[]") {
+                        print("[KeyDetection] 📁 Exiting array: \(exitedContext)")
+                    } else {
+                        print("[KeyDetection] 📁 Exiting object: \(exitedContext)")
+                    }
                 }
             }
         }

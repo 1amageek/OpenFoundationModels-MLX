@@ -15,7 +15,7 @@ public struct GPTOSSModelCard: ModelCard {
     
     public var params: GenerateParameters {
         GenerateParameters(
-            maxTokens: 4096,
+            maxTokens: 8192,
             temperature: 0.7,
             topP: 0.95
         )

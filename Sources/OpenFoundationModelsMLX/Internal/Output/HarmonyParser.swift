@@ -1,5 +1,6 @@
 import Foundation
 import RegexBuilder
+import OpenFoundationModelsCore
 
 /// Parser for OpenAI Harmony format output
 /// Handles channel-based output format with analysis, final, and commentary channels
@@ -37,58 +38,84 @@ struct HarmonyParser: Sendable {
     static func parse(_ raw: String) -> ParsedOutput {
         var channels: [String: String] = [:]
         
-        // Regex to match channel blocks
-        // Pattern: <|start|>assistant<|channel|>{name}...<|message|>{content}<|end|>
-        let channelPattern = Regex {
-            "<|start|>assistant"
-            
-            // Optional channel specification
-            Optionally {
-                "<|channel|>"
-                Capture {
-                    OneOrMore(.word)
-                }
-            }
-            
-            // Optional constrain specification (for response_format)
-            Optionally {
-                "<|constrain|>"
-                OneOrMore(.word)
-            }
-            
-            // Message marker
-            "<|message|>"
-            
-            // Content capture (non-greedy to stop at end markers)
-            Capture {
-                ZeroOrMore(.reluctant) {
-                    CharacterClass.any
-                }
-            }
-            
-            // End marker (could be <|end|>, <|return|>, or start of next message)
-            Optionally {
-                ChoiceOf {
-                    "<|end|>"
-                    "<|return|>"
-                    Lookahead { "<|start|>" }
-                }
-            }
+        // Debug logging
+        Logger.info("[HarmonyParser] Parsing raw output (\(raw.count) chars)")
+        if raw.count < 500 {
+            Logger.info("[HarmonyParser] Raw content: \(raw)")
         }
         
-        // Find all channel matches
-        for match in raw.matches(of: channelPattern) {
-            // match.output.1 is the channel name (if present)
+        // Pattern 1: Channels WITHOUT <|start|>assistant prefix (e.g., analysis channel)
+        // Using regex literal for simpler and more reliable matching
+        let channelWithoutStartPattern = #/<\|channel\|>(\w+)(?:<\|constrain\|>\w+)?<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|<\|start\|>|$)/#
+            .dotMatchesNewlines()
+        
+        // Pattern 2: Channels WITH <|start|>assistant prefix (e.g., final channel)
+        // Using regex literal for simpler and more reliable matching
+        let channelWithStartPattern = #/<\|start\|>assistant<\|channel\|>(\w+)(?:<\|constrain\|>\w+)?<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|<\|start\|>|$)/#
+            .dotMatchesNewlines()
+        
+        // Also handle assistant messages without channel specification
+        // Using regex literal for consistency
+        let simpleAssistantPattern = #/<\|start\|>assistant(?!<\|channel\|>)(?:<\|constrain\|>\w+)?<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|<\|start\|>|$)/#
+            .dotMatchesNewlines()
+        
+        // First, find channels WITH start marker (typically final channel)
+        for match in raw.matches(of: channelWithStartPattern) {
+            // match.output.1 is the channel name
             // match.output.2 is the content
-            if let channelName = match.output.1 {
-                let channel = String(channelName)
-                let content = String(match.output.2)
-                channels[channel] = content.trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                // No channel specified, treat as final
-                let content = String(match.output.2)
-                channels["final"] = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let channel = String(match.output.1)
+            var content = String(match.output.2)
+            
+            Logger.info("[HarmonyParser] Found channel WITH start: '\(channel)' with \(content.count) chars")
+            Logger.info("[HarmonyParser] Raw content for '\(channel)': \(content.prefix(100))...")
+            
+            // For final channel, extract just the JSON if present
+            if channel == "final" {
+                if let jsonContent = extractJSONFromContent(content) {
+                    content = jsonContent
+                }
             }
+            
+            channels[channel] = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // Then, find channels WITHOUT start marker (typically analysis channel)
+        for match in raw.matches(of: channelWithoutStartPattern) {
+            // match.output.1 is the channel name
+            // match.output.2 is the content
+            let channel = String(match.output.1)
+            var content = String(match.output.2)
+            
+            // Skip if we already found this channel with start marker
+            if channels[channel] != nil {
+                continue
+            }
+            
+            Logger.info("[HarmonyParser] Found channel WITHOUT start: '\(channel)' with \(content.count) chars")
+            Logger.info("[HarmonyParser] Raw content for '\(channel)': \(content.prefix(100))...")
+            
+            // For final channel, extract just the JSON if present
+            if channel == "final" {
+                if let jsonContent = extractJSONFromContent(content) {
+                    content = jsonContent
+                }
+            }
+            
+            channels[channel] = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // Debug logging for extracted channels
+        Logger.info("[HarmonyParser] Extracted channels: \(channels.keys.sorted())")
+        for (channel, content) in channels {
+            Logger.info("[HarmonyParser] Channel '\(channel)': \(content.prefix(100))...")
+        }
+        
+        // Also check for simple assistant messages without channel
+        for match in raw.matches(of: simpleAssistantPattern) {
+            // match.output.1 is the content (first capture group)
+            let content = String(match.output.1)
+            Logger.info("[HarmonyParser] Found simple assistant message with \(content.count) chars")
+            channels["final"] = content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
         // If no channels found but there's JSON, try to extract it
@@ -98,12 +125,160 @@ struct HarmonyParser: Sendable {
             }
         }
         
-        return ParsedOutput(
+        let result = ParsedOutput(
             raw: raw,
             final: channels["final"],
             analysis: channels["analysis"],
             commentary: channels["commentary"]
         )
+        
+        Logger.info("[HarmonyParser] ParsedOutput - final: \(result.final?.prefix(50) ?? "nil"), analysis: \(result.analysis?.prefix(50) ?? "nil")")
+        
+        return result
+    }
+    
+    /// Extract JSON from content by properly counting braces/brackets
+    private static func extractJSONFromContent(_ content: String) -> String? {
+        // Determine what type of JSON we have by finding the first JSON delimiter
+        let objectStart = content.firstIndex(of: "{")
+        let arrayStart = content.firstIndex(of: "[")
+        
+        // Check which comes first
+        if let arrayIdx = arrayStart, (objectStart == nil || arrayIdx < objectStart!) {
+            // Array comes first, extract array
+            var bracketCount = 0
+            var inString = false
+            var escapeNext = false
+            
+            for (index, char) in content[arrayIdx...].enumerated() {
+                let actualIndex = content.index(arrayIdx, offsetBy: index)
+                
+                if escapeNext {
+                    escapeNext = false
+                    continue
+                }
+                
+                if char == "\\" {
+                    escapeNext = true
+                    continue
+                }
+                
+                if char == "\"" && !escapeNext {
+                    inString = !inString
+                    continue
+                }
+                
+                if !inString {
+                    if char == "[" {
+                        bracketCount += 1
+                    } else if char == "]" {
+                        bracketCount -= 1
+                        if bracketCount == 0 {
+                            // Found complete JSON array
+                            let endIndex = content.index(actualIndex, offsetBy: 1)
+                            let json = String(content[arrayIdx..<endIndex])
+                            // Validate it's proper JSON
+                            if let data = json.data(using: .utf8),
+                               let _ = try? JSONSerialization.jsonObject(with: data) {
+                                return json
+                            }
+                            break
+                        }
+                    }
+                }
+            }
+        } else if let objectIdx = objectStart {
+            // Object comes first, extract object
+            var braceCount = 0
+            var inString = false
+            var escapeNext = false
+            
+            for (index, char) in content[objectIdx...].enumerated() {
+                let actualIndex = content.index(objectIdx, offsetBy: index)
+                
+                if escapeNext {
+                    escapeNext = false
+                    continue
+                }
+                
+                if char == "\\" {
+                    escapeNext = true
+                    continue
+                }
+                
+                if char == "\"" && !escapeNext {
+                    inString = !inString
+                    continue
+                }
+                
+                if !inString {
+                    if char == "{" {
+                        braceCount += 1
+                    } else if char == "}" {
+                        braceCount -= 1
+                        if braceCount == 0 {
+                            // Found complete JSON object
+                            let endIndex = content.index(actualIndex, offsetBy: 1)
+                            let json = String(content[objectIdx..<endIndex])
+                            // Validate it's proper JSON
+                            if let data = json.data(using: .utf8),
+                               let _ = try? JSONSerialization.jsonObject(with: data) {
+                                return json
+                            }
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        
+        // No JSON found with the new approach, keep the duplicate code below for backward compatibility
+        // Try to extract JSON array (this is now redundant but kept for safety)
+        if let startIndex = content.firstIndex(of: "[") {
+            var bracketCount = 0
+            var inString = false
+            var escapeNext = false
+            
+            for (index, char) in content[startIndex...].enumerated() {
+                let actualIndex = content.index(startIndex, offsetBy: index)
+                
+                if escapeNext {
+                    escapeNext = false
+                    continue
+                }
+                
+                if char == "\\" {
+                    escapeNext = true
+                    continue
+                }
+                
+                if char == "\"" && !escapeNext {
+                    inString = !inString
+                    continue
+                }
+                
+                if !inString {
+                    if char == "[" {
+                        bracketCount += 1
+                    } else if char == "]" {
+                        bracketCount -= 1
+                        if bracketCount == 0 {
+                            // Found complete JSON array
+                            let endIndex = content.index(actualIndex, offsetBy: 1)
+                            let json = String(content[startIndex..<endIndex])
+                            // Validate it's proper JSON
+                            if let data = json.data(using: .utf8),
+                               let _ = try? JSONSerialization.jsonObject(with: data) {
+                                return json
+                            }
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        
+        return nil
     }
     
     /// Extract JSON object or array from text

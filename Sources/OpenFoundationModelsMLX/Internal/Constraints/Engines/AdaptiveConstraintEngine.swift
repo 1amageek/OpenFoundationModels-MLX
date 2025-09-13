@@ -50,6 +50,22 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
                 if propNode.kind == .object && !propNode.objectKeys.isEmpty {
                     nestedSchemas[key] = propNode.objectKeys
                     print("[AdaptiveConstraintEngine] Nested schema for '\(key)': \(propNode.objectKeys.joined(separator: ", "))")
+                } else if propNode.kind == .array,
+                          let itemsNode = propNode.items,
+                          itemsNode.kind == .object && !itemsNode.objectKeys.isEmpty {
+                    // For array items, use special key notation to indicate array context
+                    let arrayKey = "\(key)[]"
+                    nestedSchemas[arrayKey] = itemsNode.objectKeys
+                    print("[AdaptiveConstraintEngine] Array item schema for '\(arrayKey)': \(itemsNode.objectKeys.joined(separator: ", "))")
+                    
+                    // Also check for nested objects within array items
+                    for (itemPropKey, itemPropNode) in itemsNode.properties {
+                        if itemPropNode.kind == .object && !itemPropNode.objectKeys.isEmpty {
+                            let nestedArrayKey = "\(key)[].\(itemPropKey)"
+                            nestedSchemas[nestedArrayKey] = itemPropNode.objectKeys
+                            print("[AdaptiveConstraintEngine] Nested array item schema for '\(nestedArrayKey)': \(itemPropNode.objectKeys.joined(separator: ", "))")
+                        }
+                    }
                 }
             }
             

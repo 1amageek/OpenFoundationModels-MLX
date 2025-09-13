@@ -56,7 +56,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         // Prepare parameters
-        let sampling = OptionsMapper.map(options)
+        let sampling = OptionsMapper.map(options, modelCard: card)
         
         do {
             // Generate raw text through backend
@@ -109,7 +109,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }()
         
         // Prepare parameters
-        let sampling = OptionsMapper.map(options)
+        let sampling = OptionsMapper.map(options, modelCard: card)
         
         return AsyncStream { continuation in
             let task = Task {

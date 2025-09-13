@@ -96,14 +96,33 @@ public enum JSONSchemaExtractor {
                         required: nestedRequired
                     )
                 } else if kind == .array,
-                          let items = propDict["items"] as? [String: Any],
-                          let itemType = items["type"] as? String {
-                    // Handle array items
+                          let items = propDict["items"] as? [String: Any] {
+                    // Handle array items - check if items have nested structure
+                    let itemsNode: SchemaNode
+                    
+                    if let itemType = items["type"] as? String {
+                        if itemType == "object",
+                           items["properties"] != nil {
+                            // Array of objects - recursively build the items schema
+                            itemsNode = buildSchemaNode(from: items) ?? SchemaNode(kind: .object)
+                        } else {
+                            // Simple type array
+                            itemsNode = SchemaNode(kind: schemaKind(from: itemType))
+                        }
+                    } else {
+                        // No type specified, assume object if properties exist
+                        if items["properties"] != nil {
+                            itemsNode = buildSchemaNode(from: items) ?? SchemaNode(kind: .object)
+                        } else {
+                            itemsNode = SchemaNode(kind: .any)
+                        }
+                    }
+                    
                     schemaProperties[key] = SchemaNode(
                         kind: .array,
                         properties: [:],
                         required: [],
-                        items: SchemaNode(kind: schemaKind(from: itemType))
+                        items: itemsNode
                     )
                 } else {
                     // Simple type

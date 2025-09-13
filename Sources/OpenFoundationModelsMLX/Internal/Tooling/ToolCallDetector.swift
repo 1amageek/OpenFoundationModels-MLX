@@ -3,7 +3,7 @@ import OpenFoundationModels
 
 // MARK: - JSONUtils (moved from separate file)
 
-private enum JSONUtils {
+enum JSONUtils {
     // Returns the first complete top-level JSON object found in text, or nil.
     static func firstTopLevelObject(in text: String) -> [String: Any]? {
         guard let start = text.firstIndex(of: "{") else { return nil }
