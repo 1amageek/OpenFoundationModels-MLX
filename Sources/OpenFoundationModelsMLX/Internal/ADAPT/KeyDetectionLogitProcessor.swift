@@ -13,6 +13,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     private let verbose: Bool
     private let topK: Int
     private let showProbabilities: Bool
+    private let modelCard: (any ModelCard)?
     
     // Mutable state
     private var jsonExtractor = JSONExtractor()  // Extract JSON from arbitrary text
@@ -22,6 +23,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     private var nestingStack: [String] = []  // Track nested object context
     private var stepCount: Int = 0
     private var lastProcessedText = ""  // Track last token to determine context
+    private var isActive: Bool = false  // Whether this processor is currently active
     
     // Delayed evaluation state for accurate key detection
     private var pendingLogitInfo: LogitInfo?
@@ -32,19 +34,24 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     /// Initialize the key detection processor
     /// - Parameters:
     ///   - tokenizer: Tokenizer for decoding tokens to text
+    ///   - modelCard: Optional ModelCard for activation control
     ///   - verbose: Whether to print detailed output (default: true)
     ///   - topK: Number of top candidates to track (default: 5)
     ///   - showProbabilities: Whether to show probability distributions (default: true)
     public init(
         tokenizer: TokenizerAdapter,
+        modelCard: (any ModelCard)? = nil,
         verbose: Bool = true,
         topK: Int = 5,
         showProbabilities: Bool = true
     ) {
         self.tokenizer = tokenizer
+        self.modelCard = modelCard
         self.verbose = verbose
         self.topK = topK
         self.showProbabilities = showProbabilities
+        // If no modelCard provided, always active
+        self.isActive = (modelCard == nil)
     }
     
     // MARK: - LogitProcessor Protocol
@@ -73,6 +80,11 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     }
     
     public func process(logits: MLXArray) -> MLXArray {
+        // Only process if active
+        guard isActive else {
+            return logits
+        }
+        
         // Delayed evaluation: Show entropy for the PREVIOUS token if it was in key generation
         if let pending = pendingLogitInfo,
            wasInKeyGeneration,
@@ -107,6 +119,16 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         // Track generated text
         generatedText.append(text)
         lastProcessedText = text
+        
+        // Check with ModelCard if we should be active
+        if let card = modelCard {
+            isActive = card.shouldActivateProcessor(generatedText, processor: self)
+        }
+        
+        // Only process if active
+        guard isActive else {
+            return
+        }
         
         // Process each character through the JSON extractor first
         for char in text {

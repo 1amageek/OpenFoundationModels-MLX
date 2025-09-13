@@ -28,7 +28,8 @@ struct GenerationPipeline: Sendable {
     func run(
         prompt: String,
         schema: SchemaNode? = nil,
-        parameters: GenerateParameters
+        parameters: GenerateParameters,
+        modelCard: (any ModelCard)? = nil
     ) async throws -> String {
         await telemetry.event(.pipelineStarted, metadata: [
             "constraint_mode": constraints.mode.rawValue,
@@ -44,7 +45,7 @@ struct GenerationPipeline: Sendable {
         
         // Always prepare constraints to enable observation for all modes
         try await executor.withTokenizer { tokenizer in
-            try await constraints.prepare(schema: schema, tokenizer: tokenizer)
+            try await constraints.prepare(schema: schema, tokenizer: tokenizer, modelCard: modelCard)
         }
         await telemetry.event(.constraintsPrepared, metadata: ["mode": constraints.mode.rawValue])
         
@@ -159,7 +160,8 @@ struct GenerationPipeline: Sendable {
     func stream(
         prompt: String,
         schema: SchemaNode? = nil,
-        parameters: GenerateParameters
+        parameters: GenerateParameters,
+        modelCard: (any ModelCard)? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -178,7 +180,7 @@ struct GenerationPipeline: Sendable {
                     
                     // Always prepare constraints to enable observation for all modes
                     try await executor.withTokenizer { tokenizer in
-                        try await constraints.prepare(schema: schema, tokenizer: tokenizer)
+                        try await constraints.prepare(schema: schema, tokenizer: tokenizer, modelCard: modelCard)
                     }
                     
                     let processors = await constraints.logitProcessors()

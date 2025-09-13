@@ -54,34 +54,27 @@ public actor MLXBackend {
         prompt: String,
         sampling: SamplingParameters,
         schema: SchemaNode? = nil,
-        schemaJSON: String? = nil
+        schemaJSON: String? = nil,
+        modelCard: (any ModelCard)? = nil
     ) async throws -> String {
         guard await hasModel() else {
             throw MLXBackendError.noModelSet
         }
         
-        // Determine response format
-        let responseFormat: ResponseFormatSpec
-        if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
-            responseFormat = .jsonSchema(schemaJSON: schemaJSON)
-        } else {
-            responseFormat = .text
-        }
-        
-        // Use unified pipeline for both text and JSON modes
-        let modelID = await currentModel() ?? "unknown"
-        let req = ChatRequest(
-            modelID: modelID,
-            prompt: prompt,
-            responseFormat: responseFormat,
-            sampling: sampling,
-            schema: schema,
-            parameters: nil
+        // Convert sampling parameters to GenerateParameters
+        let parameters = GenerateParameters(
+            maxTokens: sampling.maxTokens ?? 1024,
+            temperature: Float(sampling.temperature ?? 0.7),
+            topP: Float(sampling.topP ?? 1.0)
         )
         
-        // All requests go through the orchestrator for consistent pipeline
-        let response = try await orchestrator.generate(req)
-        return response.choices.first?.content ?? ""
+        // All requests go through the simplified orchestrator
+        return try await orchestrator.generate(
+            prompt: prompt,
+            schema: schema,
+            parameters: parameters,
+            modelCard: modelCard
+        )
     }
     
     
@@ -89,7 +82,8 @@ public actor MLXBackend {
         prompt: String,
         sampling: SamplingParameters,
         schema: SchemaNode? = nil,
-        schemaJSON: String? = nil
+        schemaJSON: String? = nil,
+        modelCard: (any ModelCard)? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -103,36 +97,26 @@ public actor MLXBackend {
                     
                     try Task.checkCancellation()
                     
-                    // Determine response format
-                    let responseFormat: ResponseFormatSpec
-                    if let schemaJSON = schemaJSON, !schemaJSON.isEmpty {
-                        responseFormat = .jsonSchema(schemaJSON: schemaJSON)
-                    } else {
-                        responseFormat = .text
-                    }
-                    
-                    // Use unified pipeline for both text and JSON modes
-                    let modelID = await currentModel() ?? "unknown"
-                    let req = ChatRequest(
-                        modelID: modelID,
-                        prompt: prompt,
-                        responseFormat: responseFormat,
-                        sampling: sampling,
-                        schema: schema,
-                        parameters: nil
+                    // Convert sampling parameters to GenerateParameters
+                    let parameters = GenerateParameters(
+                        maxTokens: sampling.maxTokens ?? 1024,
+                        temperature: Float(sampling.temperature ?? 0.7),
+                        topP: Float(sampling.topP ?? 1.0)
                     )
                     
                     try Task.checkCancellation()
                     
-                    let stream = await orchestrator.stream(req)
+                    // Use simplified orchestrator stream
+                    let stream = await orchestrator.stream(
+                        prompt: prompt,
+                        schema: schema,
+                        parameters: parameters,
+                        modelCard: modelCard
+                    )
                     
                     for try await chunk in stream {
                         try Task.checkCancellation()
-                        for delta in chunk.deltas {
-                            if let text = delta.deltaText {
-                                continuation.yield(text)
-                            }
-                        }
+                        continuation.yield(chunk)
                     }
                     continuation.finish()
                 } catch is CancellationError {

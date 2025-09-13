@@ -23,7 +23,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         mutex.withLock { $0.mode }
     }
     
-    func prepare(schema: SchemaNode?, tokenizer: any Tokenizer) async throws {
+    func prepare(schema: SchemaNode?, tokenizer: any Tokenizer, modelCard: (any ModelCard)?) async throws {
         // Create tokenizer adapter
         let tokenizerAdapter = MLXLLMTokenizer(tokenizer: tokenizer)
         
@@ -42,6 +42,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             // Create key detection processor for JSON debugging with enhanced features
             let keyDetectionProcessor = KeyDetectionLogitProcessor(
                 tokenizer: tokenizerAdapter,
+                modelCard: modelCard,  // Pass modelCard for activation control
                 verbose: true,  // Enable verbose output for key detection
                 topK: 5,        // Show top-5 candidates
                 showProbabilities: true  // Show probability distributions

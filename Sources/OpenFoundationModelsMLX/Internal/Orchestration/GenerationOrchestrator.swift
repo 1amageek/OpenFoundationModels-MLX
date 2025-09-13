@@ -4,8 +4,7 @@ import MLX
 import Tokenizers
 
 /// GenerationOrchestrator coordinates the generation process across multiple layers.
-/// It handles request processing, parameter conversion, retry logic, and response formatting.
-/// This is the high-level orchestration layer that uses the new pipeline architecture.
+/// Simplified to directly work with primitive parameters instead of request/response objects.
 actor GenerationOrchestrator {
     
     private let executor: MLXExecutor
@@ -13,11 +12,7 @@ actor GenerationOrchestrator {
     private let maxRetries: Int
     
     private enum OrchestratorError: Error {
-        case validationFailed
         case bufferLimitExceeded
-        case jsonMalformed
-        case schemaViolations
-        case maxRetriesExceeded
     }
     
     /// Initialize with executor
@@ -42,36 +37,33 @@ actor GenerationOrchestrator {
         )
     }
     
-    /// Generate a response for the given request
-    /// - Parameter request: The chat request
-    /// - Returns: The chat response
-    func generate(_ request: ChatRequest) async throws -> ChatResponse {
-        let prompt = request.prompt
-        Logger.info("[GenerationOrchestrator] Processing prompt with schema: \(request.schema != nil)")
-        if request.schema != nil {
-            Logger.info("[GenerationOrchestrator] Schema keys: \(request.schema!.objectKeys)")
+    /// Generate text with optional schema constraints
+    /// - Parameters:
+    ///   - prompt: The prompt text
+    ///   - schema: Optional schema node for constrained generation
+    ///   - parameters: Generation parameters
+    ///   - modelCard: Optional model card for processor control
+    /// - Returns: Generated text
+    func generate(
+        prompt: String,
+        schema: SchemaNode? = nil,
+        parameters: GenerateParameters,
+        modelCard: (any ModelCard)? = nil
+    ) async throws -> String {
+        Logger.info("[GenerationOrchestrator] Processing prompt with schema: \(schema != nil)")
+        if let schema = schema {
+            Logger.info("[GenerationOrchestrator] Schema keys: \(schema.objectKeys)")
         }
-        
-        let sampling = convertParameters(request)
-        let genParams = GenerateParameters(
-            maxTokens: sampling.maxTokens ?? 1024,
-            temperature: Float(sampling.temperature ?? 0.7),
-            topP: Float(sampling.topP ?? 1.0)
-        )
         
         do {
             let text = try await pipeline.run(
                 prompt: prompt,
-                schema: request.schema,
-                parameters: genParams
+                schema: schema,
+                parameters: parameters,
+                modelCard: modelCard
             )
             
-            let choice = ChatChoice(content: text, finishReason: "stop")
-            return ChatResponse(
-                choices: [choice],
-                usage: .init(promptTokens: 0, completionTokens: 0),
-                meta: ChatResponseMeta()
-            )
+            return text
         } catch {
             Stream().synchronize()
             Logger.warning("[GenerationOrchestrator] Generation failed: \(error)")
@@ -79,27 +71,29 @@ actor GenerationOrchestrator {
         }
     }
     
-    /// Stream generation for the given request
-    /// - Parameter request: The chat request
-    /// - Returns: Stream of chat chunks
-    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
+    /// Stream text generation with optional schema constraints
+    /// - Parameters:
+    ///   - prompt: The prompt text
+    ///   - schema: Optional schema node for constrained generation
+    ///   - parameters: Generation parameters
+    ///   - modelCard: Optional model card for processor control
+    /// - Returns: Stream of generated text chunks
+    func stream(
+        prompt: String,
+        schema: SchemaNode? = nil,
+        parameters: GenerateParameters,
+        modelCard: (any ModelCard)? = nil
+    ) -> AsyncThrowingStream<String, Error> {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     try Task.checkCancellation()
                     
-                    let prompt = request.prompt
-                    let sampling = convertParameters(request)
-                    let genParams = GenerateParameters(
-                        maxTokens: sampling.maxTokens ?? 1024,
-                        temperature: Float(sampling.temperature ?? 0.7),
-                        topP: Float(sampling.topP ?? 1.0)
-                    )
-                    
                     let stream = pipeline.stream(
                         prompt: prompt,
-                        schema: request.schema,
-                        parameters: genParams
+                        schema: schema,
+                        parameters: parameters,
+                        modelCard: modelCard
                     )
                     
                     var buffer = ""
@@ -113,15 +107,9 @@ actor GenerationOrchestrator {
                             throw OrchestratorError.bufferLimitExceeded
                         }
                         
-                        let delta = ChatDelta(deltaText: chunk, finishReason: nil)
-                        let chatChunk = ChatChunk(deltas: [delta])
-                        continuation.yield(chatChunk)
+                        continuation.yield(chunk)
                     }
                     
-                    // Final chunk with finish reason
-                    let finalDelta = ChatDelta(deltaText: "", finishReason: "stop")
-                    let finalChunk = ChatChunk(deltas: [finalDelta])
-                    continuation.yield(finalChunk)
                     continuation.finish()
                     
                 } catch is CancellationError {
@@ -137,24 +125,6 @@ actor GenerationOrchestrator {
                 task.cancel()
             }
         }
-    }
-    
-    /// Convert request parameters to sampling parameters
-    private func convertParameters(_ request: ChatRequest) -> SamplingParameters {
-        // Use the sampling parameters directly from the request
-        // or convert from legacy parameters if present
-        if let params = request.parameters {
-            return SamplingParameters(
-                temperature: Double(params.temperature),
-                topP: Double(params.topP),
-                topK: nil,
-                maxTokens: params.maxTokens,
-                stop: nil,
-                seed: nil
-            )
-        }
-        
-        return request.sampling
     }
 }
 

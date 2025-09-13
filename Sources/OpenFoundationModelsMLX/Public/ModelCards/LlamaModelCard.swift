@@ -158,33 +158,34 @@ public struct Llama3ModelCard: ModelCard {
                 
                 // Response schema
                 if let schemaJSON = ext.schemaJSON {
-                    "\n\nResponse Format:\n"
-                    "You must respond with a JSON object containing ACTUAL DATA.\n\n"
+                    "\n\nResponse Format:"
+                    "You must respond with a JSON object containing ACTUAL DATA.\n"
                     
-                    "CRITICAL INSTRUCTIONS:\n"
-                    "1. Generate REAL DATA VALUES, not the schema structure\n"
-                    "2. DO NOT output \"properties\", \"type\", \"required\", \"enum\" or any schema keywords\n"
-                    "3. Fill in actual values:\n"
-                    "   - Strings: real names, emails, addresses (e.g., \"John Smith\", \"john@example.com\")\n"
-                    "   - Numbers: actual numbers (e.g., 25, 2024, 99.50)\n"
-                    "   - Enums: pick ONE of the allowed values\n"
-                    "   - Arrays: populate with actual items\n\n"
+                    "CRITICAL INSTRUCTIONS:"
+                    "1. Generate REAL DATA VALUES, not the schema structure"
+                    "2. DO NOT output \"properties\", \"type\", \"required\", \"enum\" or any schema keywords"
+                    "3. Response is only included JSON"
+                    "4. Fill in actual values:\n"
+                    "   - Strings: real names, emails, addresses (e.g., \"John Smith\", \"john@example.com\")"
+                    "   - Numbers: actual numbers (e.g., 25, 2024, 99.50)"
+                    "   - Enums: pick ONE of the allowed values"
+                    "   - Arrays: populate with actual items\n"
                     
-                    "Example of WRONG response (DO NOT DO THIS):\n"
-                    "{\"properties\": {\"name\": {\"type\": \"string\"}}}\n\n"
+                    "Example of WRONG response (DO NOT DO THIS):"
+                    "{\"properties\": {\"name\": {\"type\": \"string\"}}}"
                     
-                    "Example of CORRECT response:\n"
-                    "{\"name\": \"Alice Johnson\", \"age\": 28}\n\n"
+                    "Example of CORRECT response:"
+                    "{\"name\": \"Alice Johnson\", \"age\": 28}"
                     
-                    "Schema structure to follow (generate data matching this structure):\n"
-                    "```json\n"
+                    "Schema structure to follow (generate data matching this structure):"
+                    "```json"
                     schemaJSON
                     "\n```"
                 }
                 
                 // Tool definitions
                 if !ext.toolDefs.isEmpty {
-                    "\n\nYou have access to the following tools:\n\n"
+                    "You have access to the following tools:"
                     
                     for tool in ext.toolDefs {
                         "- \(tool.name)"
@@ -194,13 +195,12 @@ public struct Llama3ModelCard: ModelCard {
                         }
                         
                         if let parametersJSON = tool.parametersJSON {
-                            "\n  Parameters: \(parametersJSON)"
+                            "Parameters: \(parametersJSON)"
                         }
                         
-                        "\n"
                     }
                     
-                    "\nTo use a tool, respond with a JSON object containing 'tool_calls'."
+                    "To use a tool, respond with a JSON object containing 'tool_calls'."
                 }
                 
                 "<|eot_id|>"
@@ -210,19 +210,19 @@ public struct Llama3ModelCard: ModelCard {
             for message in messages {
                 switch message.role {
                 case .user:
-                    "<|start_header_id|>user<|end_header_id|>\n\n"
+                    "<|start_header_id|>user<|end_header_id|>"
                     message.content
                     "<|eot_id|>"
                     
                 case .assistant:
-                    "<|start_header_id|>assistant<|end_header_id|>\n\n"
+                    "<|start_header_id|>assistant<|end_header_id|>"
                     message.content
                     "<|eot_id|>"
                     
                 case .tool:
-                    "<|start_header_id|>tool<|end_header_id|>\n\n"
+                    "<|start_header_id|>tool<|end_header_id|>"
                     if let toolName = message.toolName {
-                        "[Tool Response from \(toolName)]:\n"
+                        "[Tool Response from \(toolName)]:"
                     }
                     message.content
                     "<|eot_id|>"
@@ -233,7 +233,7 @@ public struct Llama3ModelCard: ModelCard {
             }
             
             // Start assistant response
-            "<|start_header_id|>assistant<|end_header_id|>\n\n"
+            "<|start_header_id|>assistant<|end_header_id|>"
         }
     }
 }

@@ -2,6 +2,7 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 import MLXLMCommon
+import MLXLLM
 
 /// Model card for OpenAI's GPT-OSS models
 /// Uses the same format as Ollama's implementation
@@ -20,6 +21,89 @@ public struct GPTOSSModelCard: ModelCard {
         )
     }
     
+    // MARK: - Output Processing
+    
+    /// Process Harmony format output to extract the final channel
+    public func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry {
+        let parsed = HarmonyParser.parse(raw)
+        
+        // Build metadata if needed (for future extension)
+//        let metadata = parsed.metadata(includeAnalysis: false)
+        
+        return .response(.init(
+            assetIDs: [],
+            segments: [.text(.init(content: parsed.displayContent))]
+        ))
+    }
+    
+    /// Stream Harmony format output, filtering to only final channel content
+    public func stream(
+        from chunks: AsyncThrowingStream<String, Error>,
+        options: GenerationOptions?
+    ) -> AsyncThrowingStream<Transcript.Entry, Error> {
+        return AsyncThrowingStream { continuation in
+            Task {
+                var streamState = HarmonyParser.StreamState()
+                
+                do {
+                    for try await chunk in chunks {
+                        // Process chunk through Harmony parser
+                        if let finalContent = streamState.processChunk(chunk) {
+                            // Stream only final channel content
+                            let entry = Transcript.Entry.response(.init(
+                                assetIDs: [],
+                                segments: [.text(.init(content: finalContent))]
+                            ))
+                            continuation.yield(entry)
+                        }
+                    }
+                    
+                    // Flush any remaining content
+                    if let remaining = streamState.flush() {
+                        let entry = Transcript.Entry.response(.init(
+                            assetIDs: [],
+                            segments: [.text(.init(content: remaining))]
+                        ))
+                        continuation.yield(entry)
+                    }
+                    
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Processor Control
+    
+    /// Determine if a LogitProcessor should be active based on generated text
+    /// For GPT-OSS, only activate key detection in the final channel
+    public func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool {
+        // Check if this is a KeyDetectionLogitProcessor
+        if processor is KeyDetectionLogitProcessor {
+            // Find the last channel marker to determine current channel
+            if let lastChannelRange = raw.range(of: "<|channel|>", options: .backwards) {
+                let afterChannel = String(raw[lastChannelRange.upperBound...])
+                
+                // Check which channel we're in
+                if afterChannel.hasPrefix("final") {
+                    // We're in the final channel, activate key detection
+                    return true
+                } else if afterChannel.hasPrefix("analysis") {
+                    // We're in the analysis channel, don't constrain
+                    return false
+                }
+            }
+            
+            // No channel found yet, don't activate
+            return false
+        }
+        
+        // For other processors, always activate
+        return true
+    }
+    
     public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
         let ext = TranscriptAccess.extract(from: transcript)
         let currentDate = ISO8601DateFormatter().string(from: Date())
@@ -35,10 +119,15 @@ public struct GPTOSSModelCard: ModelCard {
                                 
             "<|end|>"
             
+            "<|start|>developer<|message|>"
+            "You must respond ONLY with a JSON object that matches the schema defined below."
+            "Do NOT output the schema itself."
+            "Do NOT include explanations, commentary, or extra keys."
+            "Respond only with valid JSON data."
+            
             // Developer message with tools and instructions
             if hasTools || ext.systemText != nil {
-                "<|start|>developer<|message|>"
-                
+            
                 // Tool definitions
                 if hasTools {
                     "# Tools"
@@ -69,16 +158,15 @@ public struct GPTOSSModelCard: ModelCard {
                 // Response format schema (Harmony spec)
                 if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty {
                     "\n# Response Formats"
-                    "## response_format"
-                    "// Generate a JSON data instance that conforms to this schema."
-                    "// DO NOT copy the schema structure - create actual data values."
-                    "// Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}"
-                    "\n"
+                    "Generate a JSON data instance that conforms to this schema. Response is only included JSON."
+                    "DO NOT copy the schema structure - create actual data values.\n"
+                    "Example: for {\"name\": {\"type\": \"string\"}}, generate {\"name\": \"John Doe\"}\n"
+                    "## response_format"                                    
                     schemaJSON
                 }
-                
-                "<|end|>"
             }
+            
+            "<|end|>"
             
             // Message history
             for message in ext.messages.filter({ $0.role != .system }) {
@@ -101,7 +189,9 @@ public struct GPTOSSModelCard: ModelCard {
                 }
             }
             
-            // Let the model start its own response
+            // Start assistant response
+            // The model will choose the appropriate channel
+            "<|start|>assistant"
         }
     }
 }

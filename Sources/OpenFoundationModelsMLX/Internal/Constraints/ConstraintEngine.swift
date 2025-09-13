@@ -5,7 +5,7 @@ import Tokenizers
 protocol ConstraintEngine: Sendable {
     var mode: ConstraintMode { get }
     
-    func prepare(schema: SchemaNode?, tokenizer: any Tokenizer) async throws
+    func prepare(schema: SchemaNode?, tokenizer: any Tokenizer, modelCard: (any ModelCard)?) async throws
     
     func softPrompt(for schema: SchemaNode?) -> String?
     
