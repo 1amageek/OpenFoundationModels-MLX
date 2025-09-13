@@ -13,8 +13,8 @@ let package = Package(
             targets: ["OpenFoundationModelsMLX"]
         ),
         .executable(
-            name: "llama32",
-            targets: ["llama32-cli"]
+            name: "generable-test",
+            targets: ["generable-test-cli"]
         ),
     ],
     dependencies: [
@@ -34,9 +34,9 @@ let package = Package(
                 .product(name: "Transformers", package: "swift-transformers"),
             ]
         ),
-        // Llama 3.2 CLI executable
+        // Generable test CLI executable
         .executableTarget(
-            name: "llama32-cli",
+            name: "generable-test-cli",
             dependencies: [
                 "OpenFoundationModelsMLX",
                 .product(name: "OpenFoundationModels", package: "OpenFoundationModels"),

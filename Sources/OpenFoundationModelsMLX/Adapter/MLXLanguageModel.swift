@@ -2,6 +2,7 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 import MLXLMCommon
+import MLXLLM
 
 /// MLXLanguageModel is the provider adapter that conforms to the
 /// OpenFoundationModels LanguageModel protocol, delegating core work to the
@@ -9,22 +10,24 @@ import MLXLMCommon
 /// pre-loaded models and does NOT handle model loading.
 public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     private let card: any ModelCard
-    private let engine: MLXChatEngine
+    private let backend: MLXBackend
 
     /// Initialize with a pre-loaded ModelContainer and ModelCard.
     /// The model must be loaded separately using ModelLoader.
     /// - Parameters:
     ///   - modelContainer: Pre-loaded model from ModelLoader
     ///   - card: ModelCard that defines prompt rendering and parameters
-    public init(modelContainer: ModelContainer, card: any ModelCard) async throws {
+    ///   - additionalProcessors: Optional additional LogitProcessors (e.g., KeyDetectionLogitProcessor)
+    public init(
+        modelContainer: ModelContainer, 
+        card: any ModelCard,
+        additionalProcessors: [LogitProcessor] = []
+    ) async throws {
         self.card = card
         
-        // Create backend with the pre-loaded model
-        let backend = MLXBackend()
+        let backend = MLXBackend(additionalProcessors: additionalProcessors)
         await backend.setModel(modelContainer, modelID: card.id)
-        
-        // Initialize engine with the backend
-        self.engine = MLXChatEngine(backend: backend)
+        self.backend = backend
     }
     
     /// Convenience initializer when you have a pre-configured backend
@@ -33,7 +36,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     ///   - card: ModelCard that defines prompt rendering and parameters
     public init(backend: MLXBackend, card: any ModelCard) {
         self.card = card
-        self.engine = MLXChatEngine(backend: backend)
+        self.backend = backend
     }
 
     public var isAvailable: Bool { true }
@@ -41,71 +44,48 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     public func supports(locale: Locale) -> Bool { true }
 
     public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
-        // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
-        
-        print("🎯 [MLXLanguageModel] Generated prompt to send to LLM:")
-        print("================== PROMPT START ==================")
-        print(prompt.description)
-        print("=================== PROMPT END ===================")
-        
-        // Extract necessary data for ChatRequest
         let ext = TranscriptAccess.extract(from: transcript)
         
-        print("🔍 [MLXLanguageModel] Extracting schema information...")
-        print("📝 [MLXLanguageModel] Schema JSON: \(ext.schemaJSON ?? "nil")")
-        
-        let responseFormat: ResponseFormatSpec = {
-            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
-                print("📋 [MLXLanguageModel] Using JSON schema response format")
-                return .jsonSchema(schemaJSON: schemaJSON) 
-            }
-            print("📋 [MLXLanguageModel] Using text response format")
-            return .text
-        }()
-        
+        // Extract schema if present
         let schemaNode: SchemaNode? = {
-            switch responseFormat {
-            case .jsonSchema(let json):
-                print("🔍 [MLXLanguageModel] Parsing schema JSON to SchemaNode...")
-                if let node = SchemaBuilder.fromJSONString(json) {
-                    print("📋 [MLXLanguageModel] Schema root keys: \(node.objectKeys)")
-                    print("📋 [MLXLanguageModel] Required fields: \(node.required)")
-                    SchemaBuilder.debugPrint(node)
-                    return node
-                }
-                print("⚠️ [MLXLanguageModel] Failed to parse schema JSON")
-                return nil
-            default: 
-                return nil
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty {
+                return JSONSchemaExtractor.buildSchemaNode(from: schemaJSON)
             }
+            return nil
         }()
         
-        
-        let sampling = OptionsMapper.map(options)
-        let directParams: GenerateParameters? = (options == nil) ? card.params : nil
-        
-        let req = ChatRequest(
-            modelID: card.id,
-            prompt: prompt.description,
-            responseFormat: responseFormat,
-            sampling: sampling,
-            schema: schemaNode,
-            parameters: directParams
-        )
+        // Prepare parameters
+        let sampling = OptionsMapper.map(options, modelCard: card)
         
         do {
-            print("🚀 [MLXLanguageModel] Sending request to engine...")
-            let res = try await engine.generate(req)
-            // Convert the assistant text into a Transcript.Entry.response in a
-            // conservative way: return plain text response segment.
-            if let text = res.choices.first?.content {
-                print("📝 [MLXLanguageModel] Generated text: \(text)")
-                if let entry = ToolCallDetector.entryIfPresent(text) {
-                    return entry
-                }
-                return .response(.init(assetIDs: [], segments: [.text(.init(content: text))]))
+            // Generate raw text through backend
+            let raw = try await backend.orchestratedGenerate(
+                prompt: prompt.description,
+                sampling: sampling,
+                schema: schemaNode,
+                schemaJSON: ext.schemaJSON,
+                modelCard: card
+            )
+            
+            // Debug: Log generated content before processing
+            Logger.info("[MLXLanguageModel] Generated content:")
+            Logger.info("[MLXLanguageModel] ========== START ==========")
+            Logger.info(raw)
+            Logger.info("[MLXLanguageModel] ========== END ==========")
+            
+            // Use ModelCard to process the output
+            let entry = card.generate(from: raw, options: options)
+            
+            // Check for tool calls if needed
+            if case .response(let response) = entry,
+               let segment = response.segments.first,
+               case .text(let textSegment) = segment,
+               let toolEntry = ToolCallDetector.entryIfPresent(textSegment.content) {
+                return toolEntry
             }
+            
+            return entry
         } catch let error as CancellationError {
             throw error
         } catch let error as MLXBackend.MLXBackendError {
@@ -113,107 +93,116 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         } catch {
             throw GenerationError.decodingFailure(.init(debugDescription: String(describing: error)))
         }
-        throw GenerationError.decodingFailure(.init(debugDescription: "empty response"))
     }
 
     public func stream(transcript: Transcript, options: GenerationOptions?) -> AsyncStream<Transcript.Entry> {
-        // Generate prompt using ModelCard
         let prompt = card.prompt(transcript: transcript, options: options)
-        
         let ext = TranscriptAccess.extract(from: transcript)
         let expectsTool = ext.toolDefs.isEmpty == false
         
-        let responseFormat: ResponseFormatSpec = {
-            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty { 
-                return .jsonSchema(schemaJSON: schemaJSON) 
-            }
-            return .text
-        }()
-        
+        // Extract schema if present
         let schemaNode: SchemaNode? = {
-            switch responseFormat {
-            case .jsonSchema(let json):
-                print("🔍 [MLXLanguageModel] Parsing schema JSON to SchemaNode...")
-                if let node = SchemaBuilder.fromJSONString(json) {
-                    print("📋 [MLXLanguageModel] Schema root keys: \(node.objectKeys)")
-                    print("📋 [MLXLanguageModel] Required fields: \(node.required)")
-                    SchemaBuilder.debugPrint(node)
-                    return node
-                }
-                print("⚠️ [MLXLanguageModel] Failed to parse schema JSON")
-                return nil
-            default: 
-                return nil
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty {
+                return JSONSchemaExtractor.buildSchemaNode(from: schemaJSON)
             }
+            return nil
         }()
         
+        // Prepare parameters
+        let sampling = OptionsMapper.map(options, modelCard: card)
         
-        let sampling = OptionsMapper.map(options)
-        let directParams: GenerateParameters? = (options == nil) ? card.params : nil
-        
-        let req = ChatRequest(
-            modelID: card.id,
-            prompt: prompt.description,
-            responseFormat: responseFormat,
-            sampling: sampling,
-            schema: schemaNode,
-            parameters: directParams
-        )
         return AsyncStream { continuation in
             let task = Task {
-                let stream = await engine.stream(req)
                 do {
-                    var buffer = ""
-                    var emittedToolCalls = false
-                    for try await chunk in stream {
-                        if Task.isCancelled {
-                            break
+                    try Task.checkCancellation()
+                    
+                    // Get raw stream from backend
+                    let rawStream = await backend.orchestratedStream(
+                        prompt: prompt.description,
+                        sampling: sampling,
+                        schema: schemaNode,
+                        schemaJSON: ext.schemaJSON,
+                        modelCard: card
+                    )
+                    
+                    // Convert to AsyncThrowingStream for ModelCard
+                    let throwingStream = AsyncThrowingStream<String, Error> { streamContinuation in
+                        Task {
+                            do {
+                                for try await chunk in rawStream {
+                                    streamContinuation.yield(chunk)
+                                }
+                                streamContinuation.finish()
+                            } catch {
+                                streamContinuation.finish(throwing: error)
+                            }
                         }
+                    }
+                    
+                    // Use ModelCard to process the stream
+                    let processedStream = card.stream(from: throwingStream, options: options)
+                    
+                    // Handle tool detection if needed
+                    if expectsTool {
+                        var buffer = ""
+                        var emittedToolCalls = false
+                        let bufferLimitBytes = 2 * 1024 * 1024
                         
-                        for delta in chunk.deltas {
-                            if let text = delta.deltaText, !text.isEmpty {
-                                if expectsTool {
-                                    buffer += text
-                                    let bufferLimitBytes = 2 * 1024 * 1024
-                                    if buffer.utf8.count > bufferLimitBytes {
-                                        Logger.warning("[MLXLanguageModel] Tool detection buffer exceeded (\(bufferLimitBytes/1024)KB)")
-                                        let msg = "[Error] Stream buffer exceeded during tool detection"
-                                        continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: msg))])))
-                                        continuation.finish()
-                                        return
-                                    }
-                                    if let entry = ToolCallDetector.entryIfPresent(buffer) {
-                                        continuation.yield(entry)
-                                        emittedToolCalls = true
-                                        continuation.finish()
-                                        return
-                                    }
-                                } else {
-                                    continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: text))])))
+                        for try await entry in processedStream {
+                            try Task.checkCancellation()
+                            
+                            // Extract text content from entry
+                            if case .response(let response) = entry,
+                               let segment = response.segments.first,
+                               case .text(let textSegment) = segment {
+                                buffer += textSegment.content
+                                
+                                if buffer.utf8.count > bufferLimitBytes {
+                                    Logger.warning("[MLXLanguageModel] Tool detection buffer exceeded")
+                                    let msg = "[Error] Stream buffer exceeded during tool detection"
+                                    continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: msg))])))
+                                    continuation.finish()
+                                    return
+                                }
+                                
+                                if let toolEntry = ToolCallDetector.entryIfPresent(buffer) {
+                                    continuation.yield(toolEntry)
+                                    emittedToolCalls = true
+                                    continuation.finish()
+                                    return
                                 }
                             }
-                            if let reason = delta.finishReason, !reason.isEmpty {
-                                _ = reason
+                            
+                            // Stream the entry if not buffering for tools
+                            if !expectsTool {
+                                continuation.yield(entry)
                             }
                         }
-                    }
-                    if expectsTool && !emittedToolCalls {
-                        if !buffer.isEmpty {
+                        
+                        // If we were buffering for tools but found none, emit the buffer
+                        if !emittedToolCalls && !buffer.isEmpty {
                             continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: buffer))])))
                         }
+                    } else {
+                        // No tool detection needed, stream directly
+                        for try await entry in processedStream {
+                            try Task.checkCancellation()
+                            continuation.yield(entry)
+                        }
                     }
+                    
+                    continuation.finish()
+                } catch is CancellationError {
                     continuation.finish()
                 } catch {
                     Logger.error("[MLXLanguageModel] Stream error: \(error)")
-                    
                     let errorMessage = "[Error] Stream generation failed: \(error.localizedDescription)"
                     continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: errorMessage))])))
-                    
                     continuation.finish()
                 }
             }
             
-            continuation.onTermination = { _ in
+            continuation.onTermination = { @Sendable _ in
                 task.cancel()
             }
         }

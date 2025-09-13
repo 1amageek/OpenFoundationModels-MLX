@@ -58,4 +58,64 @@ public protocol ModelCard: Identifiable, Sendable where ID == String {
     
     /// Default generation parameters for this model (used as-is; no fallback/merge in MLX layer).
     var params: GenerateParameters { get }
+    
+    /// Process generated text output and create a Transcript.Entry
+    /// - Parameters:
+    ///   - raw: The raw generated text from the model
+    ///   - options: Generation options that might affect output processing
+    /// - Returns: A Transcript.Entry with processed content
+    func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry
+    
+    /// Process streaming output chunks into Transcript.Entry stream
+    /// - Parameters:
+    ///   - chunks: Raw text chunks from the model stream
+    ///   - options: Generation options that might affect output processing
+    /// - Returns: A stream of processed Transcript.Entry items
+    func stream(
+        from chunks: AsyncThrowingStream<String, Error>,
+        options: GenerationOptions?
+    ) -> AsyncThrowingStream<Transcript.Entry, Error>
+    
+    /// Determine if a LogitProcessor should be active based on generated text
+    /// - Parameters:
+    ///   - raw: The generated text so far
+    ///   - processor: The LogitProcessor to check
+    /// - Returns: Whether the processor should be active
+    func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool
+}
+
+// Default implementations
+extension ModelCard {
+    /// Default implementation: returns raw text as assistant entry
+    public func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry {
+        return .response(.init(assetIDs: [], segments: [.text(.init(content: raw))]))
+    }
+    
+    /// Default implementation: streams raw chunks as assistant responses
+    public func stream(
+        from chunks: AsyncThrowingStream<String, Error>,
+        options: GenerationOptions?
+    ) -> AsyncThrowingStream<Transcript.Entry, Error> {
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    for try await chunk in chunks {
+                        let entry = Transcript.Entry.response(.init(
+                            assetIDs: [],
+                            segments: [.text(.init(content: chunk))]
+                        ))
+                        continuation.yield(entry)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Default implementation: always activate processors
+    public func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool {
+        return true
+    }
 }

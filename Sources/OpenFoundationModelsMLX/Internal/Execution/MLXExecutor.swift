@@ -8,13 +8,8 @@ import Tokenizers
 /// It handles pure model execution without any business logic, validation, or constraints.
 /// This actor is responsible only for running the model and returning raw results.
 public actor MLXExecutor {
-    
-    // MARK: - Properties
-    
-    private var modelContainer: ModelContainer?
+    var modelContainer: ModelContainer?
     private var modelID: String?
-    
-    // MARK: - Errors
     
     public enum ExecutorError: LocalizedError {
         case noModelSet
@@ -29,9 +24,6 @@ public actor MLXExecutor {
             }
         }
     }
-    
-    // MARK: - Model Management
-    
     /// Set the model container for execution
     /// - Parameters:
     ///   - container: Pre-loaded ModelContainer from ModelLoader
@@ -58,9 +50,6 @@ public actor MLXExecutor {
     public func hasModel() -> Bool {
         return modelContainer != nil
     }
-    
-    // MARK: - Text Generation (Pure Execution)
-    
     /// Execute text generation without any constraints or validation
     /// - Parameters:
     ///   - prompt: The input prompt
@@ -76,14 +65,16 @@ public actor MLXExecutor {
             throw ExecutorError.noModelSet
         }
         
+        Logger.info("[MLXExecutor] Prompt being sent to LLM:")
+        Logger.info("================== PROMPT START ==================")
+        Logger.info(prompt)
+        Logger.info("================== PROMPT END ====================")
+        
         return try await container.perform { (context: ModelContext) async throws -> String in
-            // Prepare input
             let userInput = UserInput(prompt: .text(prompt))
             let input = try await context.processor.prepare(input: userInput)
             
-            // Generate based on whether we have a logit processor
             if let processor = logitProcessor {
-                // Use custom iterator with logit processor
                 let sampler = parameters.sampler()
                 let iterator = try TokenIterator(
                     input: input,
@@ -95,44 +86,23 @@ public actor MLXExecutor {
                     maxTokens: parameters.maxTokens
                 )
                 
-                // Generate with custom iterator
                 let baseStream = MLXLMCommon.generate(
                     input: input,
                     context: context,
                     iterator: iterator
                 )
                 
-                // Wrap with AbortableGenerator if processor supports error checking
-                if let errorCheckable = processor as? ErrorCheckable {
-                    let abortor = AbortableGenerator(processor: errorCheckable)
-                    let stream = abortor.generate(baseStream: baseStream)
-                    
-                    // Collect output with error detection
-                    var result = ""
-                    for try await generation in stream {
-                        switch generation {
-                        case .chunk(let text):
-                            result += text
-                        case .info, .toolCall:
-                            break
-                        }
+                var result = ""
+                for await generation in baseStream {
+                    switch generation {
+                    case .chunk(let text):
+                        result += text
+                    case .info, .toolCall:
+                        break
                     }
-                    return result
-                } else {
-                    // Collect output without error detection
-                    var result = ""
-                    for await generation in baseStream {
-                        switch generation {
-                        case .chunk(let text):
-                            result += text
-                        case .info, .toolCall:
-                            break
-                        }
-                    }
-                    return result
                 }
+                return result
             } else {
-                // Standard generation without constraints
                 let output = try MLXLMCommon.generate(
                     input: input,
                     parameters: parameters,
@@ -158,20 +128,28 @@ public actor MLXExecutor {
         logitProcessor: LogitProcessor? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
+                    Logger.debug("[MLXExecutor] executeStream: Task started")
+                    try Task.checkCancellation()
                     guard let container = modelContainer else {
                         throw ExecutorError.noModelSet
                     }
                     
+                    Logger.info("[MLXExecutor] Prompt being sent to LLM (streaming):")
+                    Logger.info("================== PROMPT START ==================")
+                    Logger.info(prompt)
+                    Logger.info("================== PROMPT END ====================")
+                    
                     try await container.perform { (context: ModelContext) async throws in
+                        try Task.checkCancellation()
+                        Logger.debug("[MLXExecutor] Starting stream processing")
                         let userInput = UserInput(prompt: .text(prompt))
                         let input = try await context.processor.prepare(input: userInput)
                         
                         let stream: AsyncThrowingStream<Generation, Error>
                         
                         if let processor = logitProcessor {
-                            // Use custom iterator with logit processor
                             let sampler = parameters.sampler()
                             let iterator = try TokenIterator(
                                 input: input,
@@ -189,41 +167,48 @@ public actor MLXExecutor {
                                 iterator: iterator
                             )
                             
-                            // Wrap with AbortableGenerator if processor supports error checking
-                            if let errorCheckable = processor as? ErrorCheckable {
-                                let abortor = AbortableGenerator(processor: errorCheckable)
-                                stream = abortor.generate(baseStream: baseStream)
-                            } else {
-                                // Convert AsyncStream to AsyncThrowingStream without error checking
-                                stream = AsyncThrowingStream { continuation in
-                                    Task {
+                            stream = AsyncThrowingStream { continuation in
+                                let innerTask = Task {
+                                    do {
                                         for await generation in baseStream {
+                                            try Task.checkCancellation()
                                             continuation.yield(generation)
                                         }
                                         continuation.finish()
+                                    } catch {
+                                        continuation.finish(throwing: error)
                                     }
+                                }
+                                continuation.onTermination = { _ in
+                                    innerTask.cancel()
                                 }
                             }
                         } else {
-                            // Standard streaming without constraints
                             let baseStream = try MLXLMCommon.generate(
                                 input: input,
                                 parameters: parameters,
                                 context: context
                             )
-                            // Convert AsyncStream to AsyncThrowingStream
                             stream = AsyncThrowingStream { continuation in
-                                Task {
-                                    for await generation in baseStream {
-                                        continuation.yield(generation)
+                                let innerTask = Task {
+                                    do {
+                                        for await generation in baseStream {
+                                            try Task.checkCancellation()
+                                            continuation.yield(generation)
+                                        }
+                                        continuation.finish()
+                                    } catch {
+                                        continuation.finish(throwing: error)
                                     }
-                                    continuation.finish()
+                                }
+                                continuation.onTermination = { _ in
+                                    innerTask.cancel()
                                 }
                             }
                         }
                         
-                        // Process stream (either wrapped with AbortableGenerator or standard)
                         for try await generation in stream {
+                            try Task.checkCancellation()
                             switch generation {
                             case .chunk(let text):
                                 continuation.yield(text)
@@ -232,17 +217,26 @@ public actor MLXExecutor {
                             }
                         }
                         
+                        Logger.debug("[MLXExecutor] Stream processing completed")
                         continuation.finish()
                     }
+                } catch is CancellationError {
+                    Logger.debug("[MLXExecutor] executeStream: Task cancelled")
+                    Stream().synchronize()
+                    continuation.finish(throwing: CancellationError())
                 } catch {
+                    Logger.debug("[MLXExecutor] executeStream: Error - \(error)")
+                    Stream().synchronize()
                     continuation.finish(throwing: error)
                 }
             }
+            
+            continuation.onTermination = { @Sendable _ in
+                Logger.debug("[MLXExecutor] executeStream: onTermination called")
+                task.cancel()
+            }
         }
     }
-    
-    // MARK: - Model Context Access
-    
     /// Get access to the model container for ADAPT processing
     /// - Returns: The model container or nil if no model is set
     public func getModelContainer() -> ModelContainer? {

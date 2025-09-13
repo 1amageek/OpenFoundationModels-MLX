@@ -1,13 +1,11 @@
 import Foundation
 import MLXLMCommon
+import MLXLLM
 
-/// MLXBackend V2 - Simplified facade that delegates to the new architecture.
-/// This maintains backward compatibility while using the new separated layers.
 public actor MLXBackend {
     
     
-    private let executor: MLXExecutor
-    private let adaptEngine: ADAPTEngine
+    let executor: MLXExecutor
     private let orchestrator: GenerationOrchestrator
     
     
@@ -26,12 +24,11 @@ public actor MLXBackend {
     }
     
     
-    public init() {
+    public init(additionalProcessors: [LogitProcessor] = []) {
         self.executor = MLXExecutor()
-        self.adaptEngine = ADAPTEngine()
         self.orchestrator = GenerationOrchestrator(
             executor: executor,
-            adaptEngine: adaptEngine
+            additionalProcessors: additionalProcessors
         )
     }
     
@@ -53,107 +50,84 @@ public actor MLXBackend {
     }
     
     
-    func generateText(
+    func orchestratedGenerate(
         prompt: String,
-        sampling: SamplingParameters
+        sampling: SamplingParameters,
+        schema: SchemaNode? = nil,
+        schemaJSON: String? = nil,
+        modelCard: (any ModelCard)? = nil
     ) async throws -> String {
         guard await hasModel() else {
             throw MLXBackendError.noModelSet
         }
         
-        // Convert to GenerateParameters
-        let genParams = GenerateParameters(
+        // Convert sampling parameters to GenerateParameters
+        let parameters = GenerateParameters(
             maxTokens: sampling.maxTokens ?? 1024,
             temperature: Float(sampling.temperature ?? 0.7),
             topP: Float(sampling.topP ?? 1.0)
         )
         
-        return try await executor.execute(
-            prompt: prompt,
-            parameters: genParams
-        )
-    }
-    
-    func generateTextWithSchema(
-        prompt: String,
-        sampling: SamplingParameters,
-        schema: SchemaNode
-    ) async throws -> String {
-        guard await hasModel() else {
-            throw MLXBackendError.noModelSet
-        }
-        
-        return try await adaptEngine.generateWithSchema(
-            executor: executor,
+        // All requests go through the simplified orchestrator
+        return try await orchestrator.generate(
             prompt: prompt,
             schema: schema,
-            parameters: sampling
+            parameters: parameters,
+            modelCard: modelCard
         )
     }
     
     
-    func streamText(
+    func orchestratedStream(
         prompt: String,
-        sampling: SamplingParameters
+        sampling: SamplingParameters,
+        schema: SchemaNode? = nil,
+        schemaJSON: String? = nil,
+        modelCard: (any ModelCard)? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
-                guard await hasModel() else {
-                    continuation.finish(throwing: MLXBackendError.noModelSet)
-                    return
-                }
-                
-                // Convert to GenerateParameters
-                let genParams = GenerateParameters(
-                    maxTokens: sampling.maxTokens ?? 1024,
-                    temperature: Float(sampling.temperature ?? 0.7),
-                    topP: Float(sampling.topP ?? 1.0)
-                )
-                
-                let stream = await executor.executeStream(
-                    prompt: prompt,
-                    parameters: genParams
-                )
-                
+            let task = Task {
                 do {
+                    try Task.checkCancellation()
+                    
+                    guard await hasModel() else {
+                        continuation.finish(throwing: MLXBackendError.noModelSet)
+                        return
+                    }
+                    
+                    try Task.checkCancellation()
+                    
+                    // Convert sampling parameters to GenerateParameters
+                    let parameters = GenerateParameters(
+                        maxTokens: sampling.maxTokens ?? 1024,
+                        temperature: Float(sampling.temperature ?? 0.7),
+                        topP: Float(sampling.topP ?? 1.0)
+                    )
+                    
+                    try Task.checkCancellation()
+                    
+                    // Use simplified orchestrator stream
+                    let stream = await orchestrator.stream(
+                        prompt: prompt,
+                        schema: schema,
+                        parameters: parameters,
+                        modelCard: modelCard
+                    )
+                    
                     for try await chunk in stream {
+                        try Task.checkCancellation()
                         continuation.yield(chunk)
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
-        }
-    }
-    
-    func streamTextWithSchema(
-        prompt: String,
-        sampling: SamplingParameters,
-        schema: SchemaNode
-    ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                guard await hasModel() else {
-                    continuation.finish(throwing: MLXBackendError.noModelSet)
-                    return
-                }
-                
-                let stream = await adaptEngine.streamWithSchema(
-                    executor: executor,
-                    prompt: prompt,
-                    schema: schema,
-                    parameters: sampling
-                )
-                
-                do {
-                    for try await chunk in stream {
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+            
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
             }
         }
     }

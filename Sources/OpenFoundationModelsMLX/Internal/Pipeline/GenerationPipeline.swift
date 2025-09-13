@@ -1,0 +1,282 @@
+import Foundation
+import MLXLMCommon
+import MLXLLM
+import Tokenizers
+import OpenFoundationModels
+
+/// Errors specific to the generation pipeline
+enum GenerationPipelineError: Error {
+    case missingModelCard
+}
+
+struct GenerationPipeline: Sendable {
+    
+    let executor: MLXExecutor
+    let constraints: any ConstraintEngine
+    let retryPolicy: RetryPolicy
+    let telemetry: any Telemetry
+    let additionalProcessors: [LogitProcessor]
+    
+    init(
+        executor: MLXExecutor,
+        constraints: any ConstraintEngine,
+        retryPolicy: RetryPolicy = .standard,
+        telemetry: any Telemetry = NoOpTelemetry(),
+        additionalProcessors: [LogitProcessor] = []
+    ) {
+        self.executor = executor
+        self.constraints = constraints
+        self.retryPolicy = retryPolicy
+        self.telemetry = telemetry
+        self.additionalProcessors = additionalProcessors
+    }
+    
+    func run(
+        prompt: String,
+        schema: SchemaNode? = nil,
+        parameters: GenerateParameters,
+        modelCard: (any ModelCard)? = nil
+    ) async throws -> String {
+        await telemetry.event(.pipelineStarted, metadata: [
+            "constraint_mode": constraints.mode.rawValue,
+            "has_schema": schema != nil
+        ])
+        
+        var finalPrompt = prompt
+        
+        if constraints.mode == .soft, let softPrompt = constraints.softPrompt(for: schema) {
+            finalPrompt = prompt + "\n\n" + softPrompt
+            await telemetry.event(.promptBuilt, metadata: ["soft_constraints_added": true])
+        }
+        
+        // Always prepare constraints to enable observation for all modes
+        try await executor.withTokenizer { tokenizer in
+            try await constraints.prepare(schema: schema, tokenizer: tokenizer, modelCard: modelCard)
+        }
+        await telemetry.event(.constraintsPrepared, metadata: ["mode": constraints.mode.rawValue])
+        
+        let constraintProcessors = await constraints.logitProcessors()
+        
+        // Combine constraint processors with additional processors if any
+        let finalProcessor: LogitProcessor? = {
+            var allProcessors: [LogitProcessor] = []
+            
+            // Add constraint processors
+            allProcessors.append(contentsOf: constraintProcessors)
+            
+            // Add additional processors (like KeyDetectionLogitProcessor)
+            allProcessors.append(contentsOf: additionalProcessors)
+            
+            // Return appropriate processor
+            if allProcessors.isEmpty {
+                return nil
+            } else if allProcessors.count == 1 {
+                return allProcessors.first
+            } else {
+                return ChainedLogitProcessor(processors: allProcessors)
+            }
+        }()
+        
+        var attempt = 0
+        var lastError: Error?
+        
+        while retryPolicy.shouldRetry(attempt: attempt) {
+            if attempt > 0 {
+                let backoff = retryPolicy.backoffInterval(for: attempt)
+                if backoff > 0 {
+                    await telemetry.event(.retryScheduled, metadata: [
+                        "attempt": attempt,
+                        "backoff_seconds": backoff
+                    ])
+                    try await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                }
+            }
+            
+            attempt += 1
+            await telemetry.event(.attemptStarted, metadata: ["attempt": attempt])
+            
+            do {
+                await telemetry.event(.generationStarted, metadata: [:])
+                
+                var raw = ""
+                let stream = await executor.executeStream(
+                    prompt: finalPrompt,
+                    parameters: parameters,
+                    logitProcessor: finalProcessor
+                )
+                
+                for try await chunk in stream {
+                    raw += chunk
+                }
+                
+                await telemetry.event(.generationCompleted, metadata: [
+                    "output_length": raw.count
+                ])
+                
+                // Log the generated output
+                Logger.info("[GenerationPipeline] Generated output (\(raw.count) characters):")
+                Logger.info("========== START OUTPUT ==========")
+                Logger.info(raw)
+                Logger.info("========== END OUTPUT ==========")
+                
+                // ModelCard is required for proper output processing
+                guard let card = modelCard else {
+                    throw GenerationPipelineError.missingModelCard
+                }
+                
+                // Process output through ModelCard to extract final content
+                let entry = card.generate(from: raw, options: nil)
+                let output: String = {
+                    switch entry {
+                    case .response(let response):
+                        return response.segments.compactMap { segment in
+                            if case .text(let text) = segment {
+                                return text.content
+                            }
+                            return nil
+                        }.joined()
+                    default:
+                        // For non-response entries, return raw
+                        return raw
+                    }
+                }()
+                
+                Logger.info("[GenerationPipeline] Extracted output from ModelCard: \(output)")
+                
+                if let validator = constraints.validator() {
+                    await telemetry.event(.validationStarted, metadata: [:])
+                    
+                    switch await validator.validate(output, schema: schema) {
+                    case .success:
+                        await telemetry.event(.validationPassed, metadata: [:])
+                        await telemetry.event(.attemptCompleted, metadata: ["attempt": attempt])
+                        await telemetry.event(.pipelineCompleted, metadata: ["attempts": attempt])
+                        return output
+                        
+                    case .failure(let error):
+                        await telemetry.event(.validationFailed, metadata: [
+                            "error": error.message,
+                            "violations": error.violations.count
+                        ])
+                        
+                        lastError = error
+                    }
+                } else {
+                    await telemetry.event(.attemptCompleted, metadata: ["attempt": attempt])
+                    await telemetry.event(.pipelineCompleted, metadata: ["attempts": attempt])
+                    return output
+                }
+                
+            } catch {
+                await telemetry.event(.attemptFailed, metadata: [
+                    "attempt": attempt,
+                    "error": String(describing: error)
+                ])
+                lastError = error
+            }
+        }
+        
+        await telemetry.event(.pipelineFailed, metadata: [
+            "attempts": attempt,
+            "last_error": String(describing: lastError ?? ValidationError(message: "Unknown error"))
+        ])
+        
+        throw lastError ?? ValidationError(message: "Failed to generate valid output after \(attempt) attempts")
+    }
+    
+    func stream(
+        prompt: String,
+        schema: SchemaNode? = nil,
+        parameters: GenerateParameters,
+        modelCard: (any ModelCard)? = nil
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    await telemetry.event(.pipelineStarted, metadata: [
+                        "constraint_mode": constraints.mode.rawValue,
+                        "has_schema": schema != nil,
+                        "streaming": true
+                    ])
+                    
+                    // ModelCard is required for proper output processing
+                    guard let card = modelCard else {
+                        throw GenerationPipelineError.missingModelCard
+                    }
+                    
+                    var finalPrompt = prompt
+                    
+                    if constraints.mode == .soft, let softPrompt = constraints.softPrompt(for: schema) {
+                        finalPrompt = prompt + "\n\n" + softPrompt
+                    }
+                    
+                    // Always prepare constraints to enable observation for all modes
+                    try await executor.withTokenizer { tokenizer in
+                        try await constraints.prepare(schema: schema, tokenizer: tokenizer, modelCard: card)
+                    }
+                    
+                    let processors = await constraints.logitProcessors()
+                    
+                    let baseStream = await executor.executeStream(
+                        prompt: finalPrompt,
+                        parameters: parameters,
+                        logitProcessor: processors.first
+                    )
+                    
+                    var buffer = ""
+                    
+                    for try await chunk in baseStream {
+                        buffer += chunk
+                        continuation.yield(chunk)
+                    }
+                    
+                    if let validator = constraints.validator() {
+                        // Process buffer through ModelCard to extract final content
+                        let entry = card.generate(from: buffer, options: nil)
+                        let output: String = {
+                            switch entry {
+                            case .response(let response):
+                                return response.segments.compactMap { segment in
+                                    if case .text(let text) = segment {
+                                        return text.content
+                                    }
+                                    return nil
+                                }.joined()
+                            default:
+                                // For non-response entries, return buffer
+                                return buffer
+                            }
+                        }()
+                        
+                        // Validate the extracted output
+                        if case .failure(let error) = await validator.validate(output, schema: schema) {
+                            throw error
+                        }
+                    }
+                    
+                    continuation.finish()
+                    
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+}
+
+extension MLXExecutor {
+    func withTokenizer<T: Sendable>(_ block: @Sendable (any Tokenizer) async throws -> T) async throws -> T {
+        guard let container = await getModelContainer() else {
+            throw ExecutorError.noModelSet
+        }
+        
+        return try await container.perform { (context: ModelContext) async throws -> T in
+            try await block(context.tokenizer)
+        }
+    }
+    
+    func getModelContainer() async -> ModelContainer? {
+        return modelContainer
+    }
+}

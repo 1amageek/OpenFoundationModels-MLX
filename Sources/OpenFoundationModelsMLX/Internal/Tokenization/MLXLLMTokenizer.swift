@@ -1,6 +1,14 @@
 import Foundation
 import Tokenizers
 
+// TokenizerAdapter protocol for tokenization
+public protocol TokenizerAdapter: Sendable {
+    func encode(_ text: String) -> [Int32]
+    func decode(_ ids: [Int32]) -> String
+    func getVocabSize() -> Int?
+    func fingerprint() -> String
+}
+
 // Simple tokenizer adapter for MLXLLM
 public final class MLXLLMTokenizer: TokenizerAdapter, @unchecked Sendable {
     
