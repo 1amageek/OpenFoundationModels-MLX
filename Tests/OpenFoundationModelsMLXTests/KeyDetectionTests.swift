@@ -35,6 +35,9 @@ struct KeyDetectionTests {
         
         var eosTokenId: Int32? { return 0 }
         var bosTokenId: Int32? { return 1 }
+        
+        func getVocabSize() -> Int? { return 50000 }
+        func fingerprint() -> String { return "mock-tokenizer" }
     }
     
     @Test("Detect simple object keys")
@@ -76,8 +79,8 @@ struct KeyDetectionTests {
         
         // Process each token
         for (tokenId, _) in tokens {
-            let token = MLX.array([tokenId])
-            processor.didSample(token)
+            let token = MLXArray([tokenId])
+            processor.didSample(token: token)
         }
         
         // Check detected keys
@@ -102,8 +105,8 @@ struct KeyDetectionTests {
         // Process each character as a token
         for char in jsonString {
             let tokenId = Int32(char.asciiValue ?? 0)
-            let token = MLX.array([tokenId])
-            processor.didSample(token)
+            let token = MLXArray([tokenId])
+            processor.didSample(token: token)
         }
         
         // Check detected keys
@@ -127,7 +130,7 @@ struct KeyDetectionTests {
         #expect(processor.currentPhase == .root)
         
         // Process opening brace
-        processor.didSample(MLX.array([123])) // {
+        processor.didSample(token: MLXArray([123])) // {
         if case .inObject = processor.currentPhase {
             // Expected
         } else {
@@ -135,7 +138,7 @@ struct KeyDetectionTests {
         }
         
         // Process opening quote for key
-        processor.didSample(MLX.array([34])) // "
+        processor.didSample(token: MLXArray([34])) // "
         if case .inString(.body(kind: .key, escaped: false)) = processor.currentPhase {
             // Expected
         } else {
@@ -143,15 +146,15 @@ struct KeyDetectionTests {
         }
         
         // Process key characters
-        processor.didSample(MLX.array([107])) // k
-        processor.didSample(MLX.array([101])) // e
-        processor.didSample(MLX.array([121])) // y
+        processor.didSample(token: MLXArray([107])) // k
+        processor.didSample(token: MLXArray([101])) // e
+        processor.didSample(token: MLXArray([121])) // y
         
         // Still in key generation
         #expect(processor.isGeneratingKey == true)
         
         // Close key quote
-        processor.didSample(MLX.array([34])) // "
+        processor.didSample(token: MLXArray([34])) // "
         
         // Should no longer be generating key
         #expect(processor.isGeneratingKey == false)
@@ -176,8 +179,8 @@ struct KeyDetectionTests {
         // Process each character as a token
         for char in jsonString {
             let tokenId = Int32(char.asciiValue ?? 0)
-            let token = MLX.array([tokenId])
-            processor.didSample(token)
+            let token = MLXArray([tokenId])
+            processor.didSample(token: token)
         }
         
         // Check detected keys (should detect "id" twice)
@@ -213,8 +216,8 @@ struct KeyDetectionTests {
         
         // Process each token
         for tokenId in tokens {
-            let token = MLX.array([tokenId])
-            processor.didSample(token)
+            let token = MLXArray([tokenId])
+            processor.didSample(token: token)
         }
         
         // Check that the escaped key was properly detected

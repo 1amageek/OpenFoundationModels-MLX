@@ -1,4 +1,5 @@
-import XCTest
+import Testing
+import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 @testable import OpenFoundationModelsMLX
@@ -18,9 +19,11 @@ struct UserProfile {
     }
 }
 
-class SchemaOutputTest: XCTestCase {
+@Suite("Schema Output Tests")
+struct SchemaOutputTest {
     
-    func testSchemaGeneration() throws {
+    @Test("Schema generation from Generable type")
+    func schemaGeneration() throws {
         // Create a ResponseFormat from the Generable type
         let responseFormat = Transcript.ResponseFormat(type: UserProfile.self)
         
@@ -41,7 +44,7 @@ class SchemaOutputTest: XCTestCase {
             // Parse the JSON to verify structure
             guard let data = schemaJSON.data(using: .utf8),
                   let schemaDict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                XCTFail("Failed to parse schema JSON")
+                Issue.record("Failed to parse schema JSON")
                 return
             }
             
@@ -77,19 +80,20 @@ class SchemaOutputTest: XCTestCase {
                 }
             }
             
-            // Test SchemaBuilder conversion
-            print("\n🔨 Testing SchemaBuilder conversion:")
-            let schemaNode = SchemaBuilder.fromJSONSchema(schemaDict)
-            print("SchemaNode kind: \(schemaNode.kind)")
-            print("SchemaNode keys: \(schemaNode.objectKeys)")
+            // Test JSONSchemaExtractor conversion
+            print("\n🔨 Testing JSONSchemaExtractor conversion:")
+            if let schemaNode = JSONSchemaExtractor.buildSchemaNode(from: schemaDict) {
+                print("SchemaNode kind: \(schemaNode.kind)")
+                print("SchemaNode keys: \(schemaNode.objectKeys)")
             
-            if let contactNode = schemaNode.properties["contact"] {
-                print("Contact node kind: \(contactNode.kind)")
-                print("Contact node keys: \(contactNode.objectKeys)")
+                if let contactNode = schemaNode.properties["contact"] {
+                    print("Contact node kind: \(contactNode.kind)")
+                    print("Contact node keys: \(contactNode.objectKeys)")
+                }
             }
             
         } else {
-            XCTFail("No schema JSON extracted from transcript")
+            Issue.record("No schema JSON extracted from transcript")
         }
     }
 }

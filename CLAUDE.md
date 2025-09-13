@@ -773,6 +773,8 @@ xed .
 
 ## Testing Requirements
 
+All tests must be written using **Swift Testing**, not XCTest.
+
 ### Unit Test Coverage
 Each ADAPT subsystem must have comprehensive tests:
 

@@ -16,10 +16,6 @@ let package = Package(
             name: "generable-test",
             targets: ["generable-test-cli"]
         ),
-        .executable(
-            name: "key-detection-test",
-            targets: ["key-detection-test"]
-        ),
     ],
     dependencies: [
         .package(url: "https://github.com/1amageek/OpenFoundationModels", branch: "main"),
@@ -47,21 +43,6 @@ let package = Package(
                 .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels"),
                 .product(name: "OpenFoundationModelsMacros", package: "OpenFoundationModels"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
-            ]
-        ),
-        // Key detection test CLI
-        .executableTarget(
-            name: "key-detection-test",
-            dependencies: [
-                "OpenFoundationModelsMLX",
-                .product(name: "MLXLMCommon", package: "mlx-swift-examples"),
-            ]
-        ),
-        // JSON Extractor test CLI
-        .executableTarget(
-            name: "json-extractor-test",
-            dependencies: [
-                "OpenFoundationModelsMLX",
             ]
         ),
         // Main test target
