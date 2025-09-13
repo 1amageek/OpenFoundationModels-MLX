@@ -49,9 +49,8 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         
         // Extract schema if present
         let schemaNode: SchemaNode? = {
-            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty,
-               let node = SchemaBuilder.fromJSONString(schemaJSON) {
-                return node
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty {
+                return JSONSchemaExtractor.buildSchemaNode(from: schemaJSON)
             }
             return nil
         }()
@@ -103,9 +102,8 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         
         // Extract schema if present
         let schemaNode: SchemaNode? = {
-            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty,
-               let node = SchemaBuilder.fromJSONString(schemaJSON) {
-                return node
+            if let schemaJSON = ext.schemaJSON, !schemaJSON.isEmpty {
+                return JSONSchemaExtractor.buildSchemaNode(from: schemaJSON)
             }
             return nil
         }()

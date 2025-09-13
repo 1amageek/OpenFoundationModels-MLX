@@ -14,6 +14,8 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     private let topK: Int
     private let showProbabilities: Bool
     private let modelCard: (any ModelCard)?
+    private let schemaKeys: [String]?
+    private let nestedSchemas: [String: [String]]?
     
     // Mutable state
     private var jsonExtractor = JSONExtractor()  // Extract JSON from arbitrary text
@@ -35,18 +37,24 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     /// - Parameters:
     ///   - tokenizer: Tokenizer for decoding tokens to text
     ///   - modelCard: Optional ModelCard for activation control
+    ///   - schemaKeys: Optional list of allowed keys from JSON schema
+    ///   - nestedSchemas: Optional nested object schemas (key -> list of allowed keys)
     ///   - verbose: Whether to print detailed output (default: true)
     ///   - topK: Number of top candidates to track (default: 5)
     ///   - showProbabilities: Whether to show probability distributions (default: true)
     public init(
         tokenizer: TokenizerAdapter,
         modelCard: (any ModelCard)? = nil,
+        schemaKeys: [String]? = nil,
+        nestedSchemas: [String: [String]]? = nil,
         verbose: Bool = true,
         topK: Int = 5,
         showProbabilities: Bool = true
     ) {
         self.tokenizer = tokenizer
         self.modelCard = modelCard
+        self.schemaKeys = schemaKeys
+        self.nestedSchemas = nestedSchemas
         self.verbose = verbose
         self.topK = topK
         self.showProbabilities = showProbabilities
@@ -209,6 +217,17 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     }
     
     // MARK: - Private Methods
+    
+    private func getCurrentContextKeys() -> [String] {
+        // If we have nested context, use nested schema keys
+        if !nestingStack.isEmpty,
+           let lastContext = nestingStack.last,
+           let nestedKeys = nestedSchemas?[lastContext] {
+            return nestedKeys
+        }
+        // Otherwise use root schema keys
+        return schemaKeys ?? []
+    }
     
     private func handleContextChanges(previousPhase: JSONStateMachine.Phase) {
         // Check if we entered a new object
@@ -448,7 +467,18 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     
     private func displayStep(_ info: LogitInfo, isKey: Bool) {
         // Use consistent format for all tokens
-        let keyMarker = isKey ? " 🔑 KEY" : ""
+        var keyMarker = isKey ? " 🔑 KEY" : ""
+        
+        // Add schema constraints if available and in key generation
+        if isKey {
+            // Determine which keys to show based on current context
+            let keysToShow = getCurrentContextKeys()
+            if !keysToShow.isEmpty {
+                let constraintList = keysToShow.joined(separator: ", ")
+                keyMarker += " [\(constraintList)]"
+            }
+        }
+        
         let entropyStr = info.entropy.isNaN ? "0.00" : String(format: "%.2f", info.entropy)
         print("\n[Step \(info.step)] Entropy: \(entropyStr) (\(entropyDescription(info.entropy)))\(keyMarker)")
         

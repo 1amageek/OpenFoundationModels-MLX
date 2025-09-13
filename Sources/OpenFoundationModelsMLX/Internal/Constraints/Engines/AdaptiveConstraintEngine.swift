@@ -38,11 +38,28 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         if let schema = schema, !schema.isEmpty {
             print("[AdaptiveConstraintEngine] Preparing KeyDetectionLogitProcessor for JSON mode")
             
+            // Extract schema keys for display
+            let schemaKeys = schema.objectKeys.isEmpty ? nil : schema.objectKeys
+            if let keys = schemaKeys {
+                print("[AdaptiveConstraintEngine] Schema constraints: \(keys.joined(separator: ", "))")
+            }
+            
+            // Extract nested schemas for proper context tracking
+            var nestedSchemas: [String: [String]] = [:]
+            for (key, propNode) in schema.properties {
+                if propNode.kind == .object && !propNode.objectKeys.isEmpty {
+                    nestedSchemas[key] = propNode.objectKeys
+                    print("[AdaptiveConstraintEngine] Nested schema for '\(key)': \(propNode.objectKeys.joined(separator: ", "))")
+                }
+            }
+            
             // JSON mode with schema constraints
             // Create key detection processor for JSON debugging with enhanced features
             let keyDetectionProcessor = KeyDetectionLogitProcessor(
                 tokenizer: tokenizerAdapter,
                 modelCard: modelCard,  // Pass modelCard for activation control
+                schemaKeys: schemaKeys,  // Pass schema keys for display
+                nestedSchemas: nestedSchemas.isEmpty ? nil : nestedSchemas,  // Pass nested schemas
                 verbose: true,  // Enable verbose output for key detection
                 topK: 5,        // Show top-5 candidates
                 showProbabilities: true  // Show probability distributions
