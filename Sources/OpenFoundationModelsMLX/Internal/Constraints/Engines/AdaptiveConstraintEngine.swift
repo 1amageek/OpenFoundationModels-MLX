@@ -70,14 +70,33 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             }
             
             // JSON mode with schema constraints
+            // Convert SchemaNode to JSON Schema format for KeyDetectionLogitProcessor
+            let jsonSchema = convertSchemaNodeToJSONSchema(schema)
+
+            print("[AdaptiveConstraintEngine] Converting SchemaNode to JSON Schema...")
+            print("[AdaptiveConstraintEngine] Original SchemaNode keys: \(schema.objectKeys)")
+            print("[AdaptiveConstraintEngine] Converted JSON Schema:")
+            if let properties = jsonSchema["properties"] as? [String: Any] {
+                print("[AdaptiveConstraintEngine] Root properties: \(properties.keys.sorted())")
+                // Debug nested structures
+                for (key, value) in properties {
+                    if let objDict = value as? [String: Any],
+                       let objProps = objDict["properties"] as? [String: Any] {
+                        print("[AdaptiveConstraintEngine]   \(key) properties: \(objProps.keys.sorted())")
+                    }
+                }
+            } else {
+                print("[AdaptiveConstraintEngine] WARNING: No properties in converted JSON Schema!")
+                print("[AdaptiveConstraintEngine] Full schema: \(jsonSchema)")
+            }
+
             // Create key detection processor for JSON debugging with enhanced features
             let keyDetectionProcessor = KeyDetectionLogitProcessor(
                 tokenizer: tokenizerAdapter,
-                modelCard: modelCard,  // Pass modelCard for activation control
-                schemaKeys: schemaKeys,  // Pass schema keys for display
-                nestedSchemas: nestedSchemas.isEmpty ? nil : nestedSchemas,  // Pass nested schemas
-                verbose: true,  // Enable verbose output for key detection
-                topK: 5,        // Show top-5 candidates
+                jsonSchema: jsonSchema,  // Pass JSON Schema format
+                modelCard: modelCard,    // Pass modelCard for activation control
+                verbose: true,           // Enable verbose output for key detection
+                topK: 5,                 // Show top-5 candidates
                 showProbabilities: true  // Show probability distributions
             )
             
@@ -127,11 +146,52 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
     
     func validator() -> (any JSONValidatorProtocol)? {
         let currentMode = mutex.withLock { $0.mode }
-        
+
         // Only validate in hard constraint mode with schema
         if currentMode == .hard {
             return SharedJSONValidator()
         }
         return nil
+    }
+
+    // MARK: - Private Helpers
+
+    /// Convert SchemaNode to JSON Schema format for JSONSchemaContextDetector
+    private func convertSchemaNodeToJSONSchema(_ node: SchemaNode) -> [String: Any] {
+        var result: [String: Any] = [:]
+
+        // Set type based on node kind
+        switch node.kind {
+        case .object:
+            result["type"] = "object"
+            if !node.properties.isEmpty {
+                var properties: [String: Any] = [:]
+                for (key, propNode) in node.properties {
+                    properties[key] = convertSchemaNodeToJSONSchema(propNode)
+                }
+                result["properties"] = properties
+            }
+            if !node.required.isEmpty {
+                result["required"] = Array(node.required)
+            }
+        case .array:
+            result["type"] = "array"
+            if let items = node.items {
+                result["items"] = convertSchemaNodeToJSONSchema(items)
+            }
+        case .string:
+            result["type"] = "string"
+        case .number:
+            result["type"] = "number"
+        case .boolean:
+            result["type"] = "boolean"
+        case .null:
+            result["type"] = "null"
+        case .any:
+            // Don't set type for "any"
+            break
+        }
+
+        return result
     }
 }
