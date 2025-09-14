@@ -222,10 +222,10 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
     }
 
     public func process(logits: MLXArray) -> MLXArray {
-        let (stepCount, isInJSON, lastWasInKeyGeneration, pendingInfo) = state.withLock { state in
+        let (stepCount, jsonExtractor, lastWasInKeyGeneration, pendingInfo) = state.withLock { state in
             state.stepCount += 1
             let pending = state.pendingLogitInfo
-            return (state.stepCount, state.jsonExtractor.isInJSON, state.lastWasInKeyGeneration, pending)
+            return (state.stepCount, state.jsonExtractor, state.lastWasInKeyGeneration, pending)
         }
 
         // Display any pending logit info from previous step
@@ -237,9 +237,23 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
             state.withLock { $0.pendingLogitInfo = nil }
         }
 
-        // Always save current logit info for display in next step
-        // This ensures we show entropy for all steps, not just key generation
-        if isInJSON {
+        // Check if we're in JSON key generation phase specifically
+        let isKeyGenerationPhase: Bool = {
+            guard jsonExtractor.isInJSON else { return false }
+
+            // Check the current phase to see if we're generating a key
+            switch jsonExtractor.getCurrentPhase() {
+            case .inObject(.expectKeyFirstQuote),   // About to start a key
+                 .inObject(.expectKeyOrEnd),         // Could start a new key
+                 .inString(.body(kind: .key, _)):    // Currently in a key string
+                return true
+            default:
+                return false
+            }
+        }()
+
+        // Only save logit info when we're in key generation phase
+        if isKeyGenerationPhase {
             let logitInfo = buildLogitInfo(from: logits, step: stepCount)
             state.withLock { $0.pendingLogitInfo = logitInfo }
         }
