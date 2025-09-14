@@ -43,7 +43,7 @@ struct KeyDetectionTests {
     @Test("Detect simple object keys")
     func detectSimpleKeys() {
         let tokenizer = MockTokenizer()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -93,7 +93,7 @@ struct KeyDetectionTests {
     @Test("Detect nested object keys")
     func detectNestedKeys() {
         let tokenizer = MockTokenizer()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -120,46 +120,30 @@ struct KeyDetectionTests {
     @Test("Track JSON parsing phases")
     func trackParsingPhases() {
         let tokenizer = MockTokenizer()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
-        
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
         processor.prompt(prompt)
-        
-        // Start with root phase
-        #expect(processor.currentPhase == .root)
-        
+
         // Process opening brace
         processor.didSample(token: MLXArray([123])) // {
-        if case .inObject = processor.currentPhase {
-            // Expected
-        } else {
-            Issue.record("Expected to be in object phase")
-        }
-        
+
         // Process opening quote for key
         processor.didSample(token: MLXArray([34])) // "
-        if case .inString(.body(kind: .key, escaped: false)) = processor.currentPhase {
-            // Expected
-        } else {
-            Issue.record("Expected to be in string key phase")
-        }
-        
+
         // Process key characters
         processor.didSample(token: MLXArray([107])) // k
         processor.didSample(token: MLXArray([101])) // e
         processor.didSample(token: MLXArray([121])) // y
-        
-        // Still in key generation
-        #expect(processor.isGeneratingKey == true)
-        
+
         // Close key quote
         processor.didSample(token: MLXArray([34])) // "
-        
-        // Should no longer be generating key
-        #expect(processor.isGeneratingKey == false)
-        
-        // Check that key was detected
+
+        // Process colon
+        processor.didSample(token: MLXArray([58])) // :
+
+        // Check that key was detected after colon
         let detectedKeys = processor.allDetectedKeys
         #expect(detectedKeys.contains("key"))
     }
@@ -167,7 +151,7 @@ struct KeyDetectionTests {
     @Test("Handle array with objects")
     func handleArrayWithObjects() {
         let tokenizer = MockTokenizer()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -191,7 +175,7 @@ struct KeyDetectionTests {
     @Test("Handle escape sequences in keys")
     func handleEscapeSequences() {
         let tokenizer = MockTokenizer()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])

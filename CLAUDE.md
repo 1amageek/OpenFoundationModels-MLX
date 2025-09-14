@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+日本語で説明し、付け焼き刃な対応ではなく根本原因を特定し修正する。
+後方互換を意識せず常に正しい実装だけを残す。
+テストはTestsディレクトリに書く
+
 ## Project Overview
 
 OpenFoundationModels-MLX is a production-ready MLX adapter for OpenFoundationModels that implements **ADAPT (Adaptive Dynamic Assertion Protocol for Transformers)** - an advanced evolution beyond traditional Schema-Constrained Decoding. ADAPT provides GPU-accelerated local inference on Apple Silicon with guaranteed JSON schema compliance through adaptive token-level assertion.

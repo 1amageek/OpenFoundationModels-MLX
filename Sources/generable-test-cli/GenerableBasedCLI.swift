@@ -124,35 +124,15 @@ struct GenerableBasedCLI {
         }
     }
     
-    enum TestChoice: Int {
-        case personProfile = 1
-        case companyProfile = 2
-    }
-    
     static func main() async {
         // Model selection - easy to switch between different models
         let selectedModel = ModelChoice.gptOSS_20B  // Change this to switch models
-        
+
         let modelID = selectedModel.modelID
         let modelCard = selectedModel.modelCard
-        
+
         print("🚀 Complex Generable Validation Test with KeyDetectionLogitProcessor")
         print("Model: \(modelID)\n")
-        
-        // Test selection menu
-        print("Select test scenario:")
-        print("1. PersonProfile (Simple nested structure)")
-        print("2. CompanyProfile (Complex structure with enums and deep nesting)")
-        print("Enter choice (1 or 2): ", terminator: "")
-        
-        let testChoice: TestChoice
-        if let input = readLine(), let choice = Int(input), let test = TestChoice(rawValue: choice) {
-            testChoice = test
-        } else {
-            print("Invalid choice. Using PersonProfile as default.")
-            testChoice = .personProfile
-        }
-        print()
         
         do {
             print("📦 Loading model...")
@@ -200,150 +180,96 @@ struct GenerableBasedCLI {
                 model: languageModel,
                 instructions: "Generate realistic data for the requested profile. Be concise and accurate. For dates use ISO format (YYYY-MM-DD)."
             )
-            
-            switch testChoice {
-            case .personProfile:
-                // Test nested Generable
-                print("=== Testing Nested Generable: PersonProfile ===")
-                print("Schema: PersonProfile with nested ContactInfo")
-                print("Required fields: name, age, occupation, contact (email required, phone optional)\n")
-                
-                print("🔄 Generating person profile...")
-                
-                do {
-                    let startTime = Date()
-                    
-                    let profile = try await session.respond(
-                        to: "Generate a profile for a software engineer working at a tech company",
-                        generating: PersonProfile.self
-                    ).content
-                    
-                    let elapsedTime = Date().timeIntervalSince(startTime)
-                    
-                    print("\n✅ Successfully generated PersonProfile in \(String(format: "%.2f", elapsedTime))s:")
-                    print("┌─ Person Details")
-                    print("│  Name: \(profile.name)")
-                    print("│  Age: \(profile.age)")
-                    print("│  Occupation: \(profile.occupation)")
-                    print("└─ Contact Info (nested)")
-                    print("   ├─ Email: \(profile.contact.email)")
-                    if let phone = profile.contact.phone {
-                        print("   └─ Phone: \(phone)")
-                    } else {
-                        print("   └─ Phone: (not provided)")
-                    }
-                    
-                    // Encode to JSON to verify structure
-                    let encoder = JSONEncoder()
-                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                    let jsonData = try encoder.encode(profile)
-                    let jsonString = String(data: jsonData, encoding: .utf8) ?? ""
-                    
-                    print("\n📋 Generated JSON:")
-                    print(jsonString)
-                    
-                    print("\n✨ Validation Result: PASSED")
-                    print("  - Nested structure correctly generated")
-                    print("  - All required fields present")
-                    print("  - Optional field handled properly")
-                    
-                } catch {
-                    print("\n❌ Failed to generate PersonProfile")
-                    print("Error: \(error)")
-                    printDecodingError(error)
-                }
-                
-            case .companyProfile:
-                // Test complex Generable with enums
-                print("=== Testing Moderate Complexity Generable: CompanyProfile ===")
-                print("Schema: CompanyProfile with nested structures and enums")
-                print("Features:")
-                print("  - 4 enum types (CompanyType, DepartmentType, EmployeeLevel, ProjectStatus)")
-                print("  - 3 levels of nesting (Company → Department → Project)")
-                print("  - Arrays of departments and projects")
-                print("  - Optional project arrays\n")
-                
-                print("🔄 Generating company profile...")
-                print("Note: This will demonstrate KeyDetectionLogitProcessor with complex JSON\n")
-                
-                do {
-                    let startTime = Date()
-                    
-                    let company = try await session.respond(
-                        to: "Generate a profile for a technology startup company founded in 2020 with 2 departments (engineering and sales). Each department should have 1-2 projects.",
-                        generating: CompanyProfile.self
-                    ).content
-                    
-                    let elapsedTime = Date().timeIntervalSince(startTime)
-                    
-                    print("\n✅ Successfully generated CompanyProfile in \(String(format: "%.2f", elapsedTime))s:")
-                    print("\n🏭 Company Overview")
-                    print("┌─ Basic Info")
-                    print("│  Name: \(company.name)")
-                    print("│  Founded: \(company.founded)")
-                    print("│  Type: \(company.type.rawValue)")
-                    print("│  Employees: \(company.employeeCount)")
-                    print("│")
-                    print("├─ Headquarters")
-                    print("│  \(company.headquarters.street)")
-                    print("│  \(company.headquarters.city), \(company.headquarters.country)")
-                    print("│  Postal Code: \(company.headquarters.postalCode)")
-                    print("│")
-                    print("└─ Departments (\(company.departments.count))")
-                    for (index, dept) in company.departments.enumerated() {
-                        let isLast = index == company.departments.count - 1
-                        let deptPrefix = isLast ? "   └─" : "   ├─"
-                        let subPrefix = isLast ? "      " : "   │  "
-                        
-                        print("\(deptPrefix) \(dept.name) (\(dept.type.rawValue))")
-                        print("\(subPrefix)Head Count: \(dept.headCount)")
-                        print("\(subPrefix)Manager: \(dept.manager.firstName) \(dept.manager.lastName)")
-                        print("\(subPrefix)  Level: \(dept.manager.level.rawValue)")
-                        print("\(subPrefix)  Experience: \(dept.manager.yearsExperience) years")
-                        
-                        if let projects = dept.projects, !projects.isEmpty {
-                            print("\(subPrefix)Projects (\(projects.count)):")
-                            for (pIndex, project) in projects.enumerated() {
-                                let isLastProject = pIndex == projects.count - 1
-                                let projectPrefix = isLastProject ? "\(subPrefix)└─" : "\(subPrefix)├─"
-                                print("\(projectPrefix) \(project.name)")
-                                print("\(subPrefix)   Status: \(project.status.rawValue)")
-                                print("\(subPrefix)   Start: \(project.startDate)")
-                                print("\(subPrefix)   Team Size: \(project.teamSize)")
-                                if let budget = project.budget {
-                                    print("\(subPrefix)   Budget: $\(String(format: "%.0f", budget))")
-                                }
+
+            // Test complex Generable with enums
+            print("=== Testing Moderate Complexity Generable: CompanyProfile ===")
+            print("Schema: CompanyProfile with nested structures and enums")
+            print("Features:")
+            print("  - 4 enum types (CompanyType, DepartmentType, EmployeeLevel, ProjectStatus)")
+            print("  - 3 levels of nesting (Company → Department → Project)")
+            print("  - Arrays of departments and projects")
+            print("  - Optional project arrays\n")
+
+            print("🔄 Generating company profile...")
+            print("Note: This will demonstrate KeyDetectionLogitProcessor with complex JSON\n")
+
+            do {
+                let startTime = Date()
+
+                let company = try await session.respond(
+                    to: "Generate a profile for a technology startup company founded in 2020 with 2 departments (engineering and sales). Each department should have 1-2 projects.",
+                    generating: CompanyProfile.self
+                ).content
+
+                let elapsedTime = Date().timeIntervalSince(startTime)
+
+                print("\n✅ Successfully generated CompanyProfile in \(String(format: "%.2f", elapsedTime))s:")
+                print("\n🏭 Company Overview")
+                print("┌─ Basic Info")
+                print("│  Name: \(company.name)")
+                print("│  Founded: \(company.founded)")
+                print("│  Type: \(company.type.rawValue)")
+                print("│  Employees: \(company.employeeCount)")
+                print("│")
+                print("├─ Headquarters")
+                print("│  \(company.headquarters.street)")
+                print("│  \(company.headquarters.city), \(company.headquarters.country)")
+                print("│  Postal Code: \(company.headquarters.postalCode)")
+                print("│")
+                print("└─ Departments (\(company.departments.count))")
+                for (index, dept) in company.departments.enumerated() {
+                    let isLast = index == company.departments.count - 1
+                    let deptPrefix = isLast ? "   └─" : "   ├─"
+                    let subPrefix = isLast ? "      " : "   │  "
+
+                    print("\(deptPrefix) \(dept.name) (\(dept.type.rawValue))")
+                    print("\(subPrefix)Head Count: \(dept.headCount)")
+                    print("\(subPrefix)Manager: \(dept.manager.firstName) \(dept.manager.lastName)")
+                    print("\(subPrefix)  Level: \(dept.manager.level.rawValue)")
+                    print("\(subPrefix)  Experience: \(dept.manager.yearsExperience) years")
+
+                    if let projects = dept.projects, !projects.isEmpty {
+                        print("\(subPrefix)Projects (\(projects.count)):")
+                        for (pIndex, project) in projects.enumerated() {
+                            let isLastProject = pIndex == projects.count - 1
+                            let projectPrefix = isLastProject ? "\(subPrefix)└─" : "\(subPrefix)├─"
+                            print("\(projectPrefix) \(project.name)")
+                            print("\(subPrefix)   Status: \(project.status.rawValue)")
+                            print("\(subPrefix)   Start: \(project.startDate)")
+                            print("\(subPrefix)   Team Size: \(project.teamSize)")
+                            if let budget = project.budget {
+                                print("\(subPrefix)   Budget: $\(String(format: "%.0f", budget))")
                             }
-                        } else {
-                            print("\(subPrefix)No active projects")
                         }
+                    } else {
+                        print("\(subPrefix)No active projects")
                     }
-                    
-                    // Encode to JSON to verify structure
-                    let encoder = JSONEncoder()
-                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                    let jsonData = try encoder.encode(company)
-                    let jsonString = String(data: jsonData, encoding: .utf8) ?? ""
-                    
-                    // Show first 1000 chars of JSON due to size
-                    print("\n📋 Generated JSON (first 1000 chars):")
-                    let truncated = String(jsonString.prefix(1000))
-                    print(truncated)
-                    if jsonString.count > 1000 {
-                        print("... (\(jsonString.count - 1000) more characters)")
-                    }
-                    
-                    print("\n✨ Validation Result: PASSED")
-                    print("  - Nested structure correctly generated")
-                    print("  - Enum values valid (4 types)")
-                    print("  - Arrays of departments and projects handled")
-                    print("  - 3-level nesting successful")
-                    
-                } catch {
-                    print("\n❌ Failed to generate CompanyProfile")
-                    print("Error: \(error)")
-                    printDecodingError(error)
                 }
+
+                // Encode to JSON to verify structure
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let jsonData = try encoder.encode(company)
+                let jsonString = String(data: jsonData, encoding: .utf8) ?? ""
+
+                // Show first 1000 chars of JSON due to size
+                print("\n📋 Generated JSON (first 1000 chars):")
+                let truncated = String(jsonString.prefix(1000))
+                print(truncated)
+                if jsonString.count > 1000 {
+                    print("... (\(jsonString.count - 1000) more characters)")
+                }
+
+                print("\n✨ Validation Result: PASSED")
+                print("  - Nested structure correctly generated")
+                print("  - Enum values valid (4 types)")
+                print("  - Arrays of departments and projects handled")
+                print("  - 3-level nesting successful")
+
+            } catch {
+                print("\n❌ Failed to generate CompanyProfile")
+                print("Error: \(error)")
+                printDecodingError(error)
             }
             
             print("\n🏁 Test completed")
