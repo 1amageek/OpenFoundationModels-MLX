@@ -10,25 +10,8 @@ struct ProcessorActivationTests {
     @Test("GPTOSSModelCard activates KeyDetectionLogitProcessor only in final channel")
     func gptOSSActivation() {
         let card = GPTOSSModelCard(id: "test-model")
-        
-        // Create a mock processor for testing
-        final class MockProcessor: LogitProcessor {
-            func prompt(_ prompt: MLXArray) {}
-            func process(logits: MLXArray) -> MLXArray { logits }
-            func didSample(token: MLXArray) {}
-        }
-        
-        // Create a mock tokenizer for KeyDetectionLogitProcessor
-        final class MockTokenizer: TokenizerAdapter, @unchecked Sendable {
-            func encode(_ text: String) -> [Int32] { [] }
-            func decode(_ ids: [Int32]) -> String { "" }
-            func getVocabSize() -> Int? { 50000 }
-            func fingerprint() -> String { "mock" }
-            var eosTokenId: Int32? { 0 }
-            var bosTokenId: Int32? { 1 }
-        }
-        
-        let mockProcessor = MockProcessor()
+
+        let mockProcessor = MockLogitProcessor()
         let keyDetectionProcessor = KeyDetectionLogitProcessor(tokenizer: MockTokenizer(), verbose: false)
         
         // Test activation in analysis channel

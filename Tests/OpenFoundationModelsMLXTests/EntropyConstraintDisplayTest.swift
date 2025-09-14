@@ -8,37 +8,21 @@ import MLXLMCommon
 struct EntropyConstraintDisplayTest {
 
     // Mock tokenizer for testing
-    final class TestTokenizerAdapter: TokenizerAdapter, @unchecked Sendable {
+    final class TestTokenizerAdapter: ConfigurableTokenizer {
         var tokenCounter = 0
+        let outputs = [
+            "<|channel|>", "analysis", "<|message|>",
+            "Let", " me", " think", "...",
+            "{\"", "name", "\":\"", "Alice", "\",\"",
+            "age", "\":", "30", ",\"",
+            "city", "\":\"", "NYC", "\"}"
+        ]
 
-        func encode(_ text: String) -> [Int32] {
-            return Array(repeating: Int32(0), count: text.count)
-        }
-
-        func decode(_ tokens: [Int32]) -> String {
-            // Return different strings based on counter to simulate token generation
-            let outputs = [
-                "<|channel|>", "analysis", "<|message|>",
-                "Let", " me", " think", "...",
-                "{\"", "name", "\":\"", "Alice", "\",\"",
-                "age", "\":", "30", ",\"",
-                "city", "\":\"", "NYC", "\"}"
-            ]
+        override func decode(_ tokens: [Int32]) -> String {
             let result = tokenCounter < outputs.count ? outputs[tokenCounter] : ""
             tokenCounter += 1
             return result
         }
-
-        var eosTokenId: Int32 { 0 }
-        var bosTokenId: Int32 { 1 }
-        var unknownTokenId: Int32 { 2 }
-
-        func convertTokenToString(_ token: Int32) -> String? {
-            return decode([token])
-        }
-
-        func getVocabSize() -> Int? { return 50000 }
-        func fingerprint() -> String { return "test-tokenizer" }
     }
 
     @Test("Complete flow: LLM output → JSON detection → Entropy display with constraints")

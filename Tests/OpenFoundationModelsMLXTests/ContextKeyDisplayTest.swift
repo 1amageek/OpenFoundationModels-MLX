@@ -6,45 +6,11 @@ import MLX
 @Suite("Context Key Display Tests")
 struct ContextKeyDisplayTest {
 
-    final class MockTokenizer: TokenizerAdapter, @unchecked Sendable {
-        func encode(_ text: String) -> [Int32] {
-            return text.map { Int32($0.asciiValue ?? 0) }
-        }
-
-        func decode(_ tokens: [Int32]) -> String {
-            if let first = tokens.first,
-               let scalar = UnicodeScalar(Int(first)) {
-                return String(Character(scalar))
-            }
-            return ""
-        }
-
-        var eosTokenId: Int32 { 0 }
-        var bosTokenId: Int32 { 1 }
-        var unknownTokenId: Int32 { 2 }
-
-        func convertTokenToString(_ token: Int32) -> String? {
-            if let scalar = UnicodeScalar(Int(token)) {
-                return String(Character(scalar))
-            }
-            return nil
-        }
-
-        func getVocabSize() -> Int? { 50000 }
-        func fingerprint() -> String { "mock-tokenizer" }
-    }
-
     @Test("Shows correct context keys for nested structures")
     func testNestedContextKeys() {
         // Setup CompanyProfile-like schema
-        let nestedSchemas = [
-            "headquarters": ["city", "country", "postalCode", "street"],
-            "departments[]": ["headCount", "manager", "name", "projects", "type"],
-            "departments[].manager": ["email", "firstName", "lastName", "level", "yearsExperience"],
-            "departments[].projects[]": ["budget", "name", "startDate", "status", "teamSize"]
-        ]
-
-        let rootKeys = ["departments", "employeeCount", "founded", "headquarters", "name", "type"]
+        let nestedSchemas = TestSchemas.companyProfileNestedSchemas
+        let rootKeys = TestSchemas.companyProfileRootKeys
 
         let tokenizer = MockTokenizer()
         let processor = KeyDetectionLogitProcessor(

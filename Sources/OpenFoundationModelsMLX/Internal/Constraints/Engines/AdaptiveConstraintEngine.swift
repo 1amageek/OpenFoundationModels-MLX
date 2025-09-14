@@ -12,7 +12,6 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
     private struct State: Sendable {
         var mode: ConstraintMode = .off
         var preparedSchema: SchemaNode?
-        var observableProcessor: ObservableLogitProcessor?
         var keyDetectionProcessor: KeyDetectionLogitProcessor?
         var schemaProcessors: [any LogitProcessor] = []
     }
@@ -105,7 +104,6 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             mutex.withLock {
                 $0.mode = .hard
                 $0.preparedSchema = schema
-                $0.observableProcessor = nil  // Not using ObservableLogitProcessor
                 $0.keyDetectionProcessor = keyDetectionProcessor
                 $0.schemaProcessors = [] // Will be populated with ADAPT processors
             }
@@ -114,7 +112,6 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             mutex.withLock {
                 $0.mode = .off
                 $0.preparedSchema = nil
-                $0.observableProcessor = nil
                 $0.keyDetectionProcessor = nil
                 $0.schemaProcessors = []
             }
@@ -130,8 +127,6 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
         return mutex.withLock { state in
             var processors: [any LogitProcessor] = []
             
-            // Only use KeyDetectionLogitProcessor, not ObservableLogitProcessor
-            
             // Add key detection processor if in JSON mode
             if let keyDetection = state.keyDetectionProcessor {
                 processors.append(keyDetection)
@@ -142,16 +137,6 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             
             return processors
         }
-    }
-    
-    func validator() -> (any JSONValidatorProtocol)? {
-        let currentMode = mutex.withLock { $0.mode }
-
-        // Only validate in hard constraint mode with schema
-        if currentMode == .hard {
-            return SharedJSONValidator()
-        }
-        return nil
     }
 
     // MARK: - Private Helpers

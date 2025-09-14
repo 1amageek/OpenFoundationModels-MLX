@@ -31,8 +31,6 @@ actor GenerationOrchestrator {
         self.pipeline = GenerationPipeline(
             executor: executor,
             constraints: AdaptiveConstraintEngine(),
-            retryPolicy: RetryPolicy(maxAttempts: maxRetries),
-            telemetry: NoOpTelemetry(),
             additionalProcessors: additionalProcessors
         )
     }

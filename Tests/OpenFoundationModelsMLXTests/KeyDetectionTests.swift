@@ -4,41 +4,10 @@ import MLX
 import MLXLMCommon
 @testable import OpenFoundationModelsMLX
 
+/// Consolidated tests for key detection functionality
+/// Combines unit tests, integration tests, and context-aware tests
 @Suite("Key Detection Tests")
 struct KeyDetectionTests {
-    
-    // Mock tokenizer for testing
-    final class MockTokenizer: TokenizerAdapter {
-        private let tokenMap: [Int32: String]
-        
-        init(tokenMap: [Int32: String] = [:]) {
-            self.tokenMap = tokenMap
-        }
-        
-        func encode(_ text: String) -> [Int32] {
-            // Simple character-based encoding for testing
-            return text.map { Int32($0.asciiValue ?? 0) }
-        }
-        
-        func decode(_ tokens: [Int32]) -> String {
-            if let customText = tokenMap[tokens.first ?? -1] {
-                return customText
-            }
-            // Default to character decoding
-            return String(tokens.compactMap { 
-                if let scalar = UnicodeScalar(Int($0)) {
-                    return Character(scalar)
-                }
-                return nil
-            })
-        }
-        
-        var eosTokenId: Int32? { return 0 }
-        var bosTokenId: Int32? { return 1 }
-        
-        func getVocabSize() -> Int? { return 50000 }
-        func fingerprint() -> String { return "mock-tokenizer" }
-    }
     
     @Test("Detect simple object keys")
     func detectSimpleKeys() {
@@ -285,16 +254,185 @@ struct KeyDetectionTests {
     @Test("JSONStateMachine error handling")
     func stateMachineErrorHandling() {
         var machine = JSONStateMachine()
-        
+
         // Invalid character at root
         machine.processCharacter("x")
         #expect(machine.phase == .error)
         #expect(machine.isError == true)
-        
+
         // Reset and test invalid sequence
         machine.reset()
         machine.processCharacter("{")
         machine.processCharacter("x") // Invalid: expecting quote or }
         #expect(machine.phase == .error)
+    }
+}
+
+// MARK: - Integration Tests
+
+@Suite("Key Detection Integration Tests")
+struct KeyDetectionIntegrationTests {
+
+    @Test("Detects keys with correct context in CompanyProfile")
+    func testCompanyProfileContextDetection() {
+        let nestedSchemas = TestSchemas.companyProfileNestedSchemas
+        let rootKeys = TestSchemas.companyProfileRootKeys
+
+        let tokenizer = CharacterTokenizer()
+        let processor = KeyDetectionLogitProcessor(
+            tokenizer: tokenizer,
+            schemaKeys: rootKeys,
+            nestedSchemas: nestedSchemas,
+            verbose: false,
+            showProbabilities: false
+        )
+
+        let json = """
+        {
+          "name": "TechCorp",
+          "headquarters": {
+            "city": "SF",
+            "country": "USA"
+          },
+          "departments": [
+            {
+              "name": "Eng",
+              "manager": {
+                "firstName": "Alice",
+                "email": "alice@co.com"
+              },
+              "projects": [
+                {
+                  "name": "Alpha",
+                  "budget": 1000
+                }
+              ]
+            }
+          ]
+        }
+        """
+
+        processor.prompt(MLXArray.zeros([1]))
+
+        for char in json {
+            let tokenId = Int32(char.asciiValue ?? 0)
+            let token = MLXArray([tokenId])
+            processor.didSample(token: token)
+        }
+
+        let detectedKeys = processor.allDetectedKeys
+
+        #expect(detectedKeys.contains("name"))
+        #expect(detectedKeys.contains("headquarters"))
+        #expect(detectedKeys.contains("departments"))
+        #expect(detectedKeys.contains("city"))
+        #expect(detectedKeys.contains("country"))
+        #expect(detectedKeys.contains("firstName"))
+        #expect(detectedKeys.contains("email"))
+        #expect(detectedKeys.contains("budget"))
+    }
+
+    @Test("Complete JSON detection")
+    func completeJSONDetection() {
+        let testCases: [(json: String, expectedKeys: [String])] = [
+            (
+                json: #"{"name":"John","age":30}"#,
+                expectedKeys: ["name", "age"]
+            ),
+            (
+                json: #"{"user":{"firstName":"Alice","lastName":"Smith"},"active":true}"#,
+                expectedKeys: ["user", "firstName", "lastName"]
+            ),
+            (
+                json: #"{"items":[{"id":1,"name":"Item1"},{"id":2,"name":"Item2"}],"total":2}"#,
+                expectedKeys: ["items", "id", "name", "id", "name", "total"]
+            )
+        ]
+
+        for testCase in testCases {
+            var stateMachine = JSONStateMachine()
+            var detectedKeys: [String] = []
+
+            for char in testCase.json {
+                let previousPhase = stateMachine.phase
+                stateMachine.processCharacter(char)
+
+                if case .inString(.body(kind: .key, escaped: false)) = previousPhase {
+                    if case .inObject(.expectColon) = stateMachine.phase {
+                        let key = stateMachine.currentKey
+                        if !key.isEmpty {
+                            detectedKeys.append(key)
+                        }
+                    }
+                }
+            }
+
+            for expectedKey in testCase.expectedKeys {
+                #expect(detectedKeys.contains(expectedKey))
+            }
+        }
+    }
+
+    @Test("Token-split keys")
+    func tokenSplitKeys() {
+        let splitKeyScenarios = [
+            (tokens: ["{\"" , "na", "me", "\":\"" , "John", "\"}"], expectedKey: "name"),
+            (tokens: ["{\"" , "first", "Name", "\":\"" , "Alice", "\"}"], expectedKey: "firstName"),
+            (tokens: ["{\"" , "email", "Address", "\":\"" , "test@", "example.com", "\"}"], expectedKey: "emailAddress")
+        ]
+
+        for scenario in splitKeyScenarios {
+            var stateMachine = JSONStateMachine()
+            var detectedKeys: [String] = []
+
+            for token in scenario.tokens {
+                for char in token {
+                    let previousPhase = stateMachine.phase
+                    stateMachine.processCharacter(char)
+
+                    if case .inString(.body(kind: .key, escaped: false)) = previousPhase {
+                        if case .inObject(.expectColon) = stateMachine.phase {
+                            let key = stateMachine.currentKey
+                            if !key.isEmpty {
+                                detectedKeys.append(key)
+                            }
+                        }
+                    }
+                }
+            }
+
+            #expect(detectedKeys.contains(scenario.expectedKey))
+        }
+    }
+
+    @Test("JSONExtractor embedded JSON")
+    func jsonExtractorEmbeddedJSON() {
+        let testCases = [
+            (
+                input: "Here's some JSON: {\"key\": \"value\"} and more text",
+                expectedJSON: "{\"key\": \"value\"}"
+            ),
+            (
+                input: "<|channel|>final<|message|>{\"name\": \"Alice\", \"age\": 30}",
+                expectedJSON: "{\"name\": \"Alice\", \"age\": 30}"
+            )
+        ]
+
+        for testCase in testCases {
+            var extractor = JSONExtractor()
+            var jsonBuffer = ""
+
+            for char in testCase.input {
+                let shouldProcess = extractor.processCharacter(char)
+                if shouldProcess {
+                    jsonBuffer.append(char)
+                }
+            }
+
+            let normalizedBuffer = jsonBuffer.replacingOccurrences(of: " ", with: "")
+            let normalizedExpected = testCase.expectedJSON.replacingOccurrences(of: " ", with: "")
+
+            #expect(normalizedBuffer.contains(normalizedExpected) || normalizedBuffer == normalizedExpected)
+        }
     }
 }

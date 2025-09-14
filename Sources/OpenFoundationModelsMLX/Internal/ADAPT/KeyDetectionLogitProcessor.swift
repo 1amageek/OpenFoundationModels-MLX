@@ -8,22 +8,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
 
     // MARK: - Nested Types
 
-    /// Information about logit probabilities at a generation step
-    struct LogitInfo {
-        let step: Int
-        let vocabSize: Int
-        let topCandidates: [Candidate]
-        let entropy: Float
-        var selectedToken: Int32?
-        let availableKeys: [String]      // Available keys at this context
-
-        struct Candidate {
-            let tokenId: Int32
-            let probability: Float
-            let logit: Float
-            let text: String?
-        }
-    }
 
     // MARK: - Properties
 
@@ -48,7 +32,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     }
 
     // Logit analysis state
-    private var pendingLogitInfo: LogitInfo?
     private var lastWasInKeyGeneration: Bool = false
 
     // MARK: - Initialization
@@ -171,7 +154,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         generatedText = ""
         detectedKeys = []
         stepCount = 0
-        pendingLogitInfo = nil
         lastWasInKeyGeneration = false
 
         if verbose {
@@ -194,18 +176,9 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
             return logits
         }
 
-        // Display pending logit info from previous step
-        if let pending = pendingLogitInfo {
-            if verbose && showProbabilities {
-                displayStep(pending, isKey: lastWasInKeyGeneration)
-            }
-            pendingLogitInfo = nil
-        }
-
-        // Always save current logit info for display in next step
-        // This ensures we show entropy for all steps, not just key generation
-        if jsonExtractor.isInJSON {
-            pendingLogitInfo = buildLogitInfo(from: logits, step: stepCount)
+        // Display logit info if verbose and in JSON
+        if verbose && showProbabilities && jsonExtractor.isInJSON {
+            displayStepInfo(from: logits, step: stepCount, isKey: lastWasInKeyGeneration)
         }
 
         return logits
@@ -296,13 +269,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     }
 
     public func finish() {
-        // Display any pending logit info (only for key generation)
-        if let pending = pendingLogitInfo {
-            if verbose && showProbabilities && lastWasInKeyGeneration {
-                displayStep(pending, isKey: true)
-            }
-            pendingLogitInfo = nil
-        }
 
         if verbose {
             print("\n[KeyDetection] Generation completed")
@@ -431,9 +397,9 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         }
     }
 
-    // MARK: - Probability Analysis
+    // MARK: - Display Helpers
 
-    private func buildLogitInfo(from logits: MLXArray, step: Int) -> LogitInfo {
+    private func displayStepInfo(from logits: MLXArray, step: Int, isKey: Bool) {
         let vocabSize = logits.dim(logits.ndim - 1)
 
         var logits = logits
@@ -448,17 +414,11 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         // Get current available keys
         let availableKeys = getCurrentAvailableKeys()
 
-        return LogitInfo(
-            step: step,
-            vocabSize: vocabSize,
-            topCandidates: candidates,
-            entropy: entropy,
-            selectedToken: nil,
-            availableKeys: availableKeys
-        )
+        // Display the info
+        displayStep(step: step, entropy: entropy, availableKeys: availableKeys, topCandidates: candidates, isKey: isKey)
     }
 
-    private func extractTopCandidates(logits: MLXArray, probs: MLXArray, k: Int) -> [LogitInfo.Candidate] {
+    private func extractTopCandidates(logits: MLXArray, probs: MLXArray, k: Int) -> [(tokenId: Int32, probability: Float, logit: Float, text: String?)] {
         let sortedIndices = argSort(probs, axis: -1)
         let vocabSize = logits.dim(logits.ndim - 1)
         let effectiveK = min(k, vocabSize)
@@ -473,12 +433,10 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         let logitsArray = logits.asArray(Float.self)
 
         return topIndices.reversed().map { tokenId in
-            LogitInfo.Candidate(
-                tokenId: tokenId,
-                probability: probsArray[Int(tokenId)],
-                logit: logitsArray[Int(tokenId)],
-                text: tokenizer.decode([tokenId])
-            )
+            (tokenId: tokenId,
+             probability: probsArray[Int(tokenId)],
+             logit: logitsArray[Int(tokenId)],
+             text: tokenizer.decode([tokenId]))
         }
     }
 
@@ -498,22 +456,22 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         return max(0.0, result)
     }
 
-    private func displayStep(_ info: LogitInfo, isKey: Bool) {
+    private func displayStep(step: Int, entropy: Float, availableKeys: [String], topCandidates: [(tokenId: Int32, probability: Float, logit: Float, text: String?)], isKey: Bool) {
         // Only display entropy for key generation
         guard isKey else { return }
 
         // Build constraint display for key generation context
         let constraintDisplay: String
-        if !info.availableKeys.isEmpty {
-            constraintDisplay = " [\(info.availableKeys.joined(separator: ", "))]"
+        if !availableKeys.isEmpty {
+            constraintDisplay = " [\(availableKeys.joined(separator: ", "))]"
         } else {
             constraintDisplay = " []"
         }
 
-        let entropyStr = info.entropy.isNaN ? "0.00" : String(format: "%.2f", info.entropy)
-        print("\n[Step \(info.step)] Entropy: \(entropyStr) (\(entropyDescription(info.entropy)))\(constraintDisplay)")
+        let entropyStr = entropy.isNaN ? "0.00" : String(format: "%.2f", entropy)
+        print("\n[Step \(step)] Entropy: \(entropyStr) (\(entropyDescription(entropy)))\(constraintDisplay)")
 
-        for (index, candidate) in info.topCandidates.prefix(min(5, topK)).enumerated() {
+        for (index, candidate) in topCandidates.prefix(min(5, topK)).enumerated() {
             let probValue = String(format: "%.1f%%", candidate.probability * 100)
             let text = candidate.text ?? "<unknown>"
             let displayText = formatTokenForDisplay(text)

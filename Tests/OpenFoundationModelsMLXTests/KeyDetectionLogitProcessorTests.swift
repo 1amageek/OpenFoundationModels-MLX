@@ -124,28 +124,3 @@ struct KeyDetectionLogitProcessorTests {
         #expect(detectedKeys == ["name", "age"])
     }
 }
-
-// Mock tokenizer for testing
-final class MockTokenizerAdapter: TokenizerAdapter, @unchecked Sendable {
-    var nextDecodeResult: String = ""
-    
-    func encode(_ text: String) -> [Int32] {
-        // Simple mock: one token per character
-        return Array(repeating: Int32(0), count: text.count)
-    }
-    
-    func decode(_ tokens: [Int32]) -> String {
-        return nextDecodeResult
-    }
-    
-    var eosTokenId: Int32 { 0 }
-    var bosTokenId: Int32 { 1 }
-    var unknownTokenId: Int32 { 2 }
-    
-    func convertTokenToString(_ token: Int32) -> String? {
-        return nextDecodeResult
-    }
-    
-    func getVocabSize() -> Int? { return 50000 }
-    func fingerprint() -> String { return "mock-tokenizer-adapter" }
-}
