@@ -1,8 +1,8 @@
 import Foundation
 
 /// Detects the current context in a partial JSON string and returns available schema keys
-/// This is a standalone component with no dependencies on other parts of the system
-public struct JSONSchemaContextDetector {
+/// Uses SchemaNode for type-safe schema representation
+public struct JSONSchemaContextDetector: Sendable {
 
     // MARK: - Types
 
@@ -54,12 +54,17 @@ public struct JSONSchemaContextDetector {
 
     // MARK: - Properties
 
-    private let schema: [String: Any]
+    private let schemaNode: SchemaNode
 
     // MARK: - Initialization
 
+    public init(schema: SchemaNode) {
+        self.schemaNode = schema
+    }
+
+    /// Convenience initializer from JSON Schema dictionary
     public init(schema: [String: Any]) {
-        self.schema = schema
+        self.schemaNode = SchemaNode.from(jsonSchema: schema)
     }
 
     // MARK: - Public Methods
@@ -74,159 +79,144 @@ public struct JSONSchemaContextDetector {
             return []
         }
 
-        // Get the schema definition for the current path
-        let schemaNode = getSchemaNode(at: context.path)
+        // Get the schema node for the current path
+        let node = getSchemaNode(at: context.path)
 
-        // Extract available keys from schema
-        let allKeys = extractKeys(from: schemaNode)
+        // Extract available keys from schema node
+        let availableKeys = node?.availableKeys() ?? []
 
-        // Filter out already used keys at this level
-        let usedKeys = context.usedKeysAtCurrentLevel
-        let availableKeys = allKeys.filter { !usedKeys.contains($0) }
+        // Filter out already used keys
+        let remainingKeys = availableKeys.filter { !context.usedKeys.contains($0) }
 
-        return availableKeys.sorted()
+        return remainingKeys
     }
 
     // MARK: - Private Methods
 
-    /// Parse context from partial JSON using a more robust approach
-    private func parseContext(from partialJSON: String) -> (position: JSONPosition, path: JSONPath, usedKeysAtCurrentLevel: Set<String>) {
-        guard !partialJSON.isEmpty else {
-            return (.invalid, JSONPath(), [])
+    private func shouldShowKeys(at position: JSONPosition) -> Bool {
+        switch position {
+        case .beforeFirstKey, .afterComma, .insideKey:
+            return true
+        default:
+            return false
         }
+    }
 
-        // Track nested context
-        struct Context {
-            var path: [String] = []
-            var usedKeys: [String] = []
-            var pendingKey: String? = nil
-        }
-
-        var contextStack: [Context] = []
-        var currentContext = Context()
+    private func parseContext(from partialJSON: String) -> (position: JSONPosition, path: JSONPath, usedKeys: Set<String>) {
         var position: JSONPosition = .invalid
+        var path: [String] = []
+        var usedKeys: Set<String> = []
+        var currentKey = ""
 
         var inString = false
-        var inKey = false
+        var isKey = false
         var escaped = false
-        var currentKey = ""
         var depth = 0
+        var arrayDepths: Set<Int> = []
 
-        var i = partialJSON.startIndex
-        while i < partialJSON.endIndex {
-            let char = partialJSON[i]
-
-            // Handle escape sequences
+        for char in partialJSON {
             if escaped {
                 escaped = false
-                if inKey {
+                if inString && isKey {
                     currentKey.append(char)
                 }
-                i = partialJSON.index(after: i)
                 continue
             }
 
-            if char == "\\" && inString {
+            if char == "\\" {
                 escaped = true
-                i = partialJSON.index(after: i)
+                if inString && isKey {
+                    currentKey.append(char)
+                }
                 continue
             }
 
-            // Main character processing
-            if !inString {
-                switch char {
-                case "{":
-                    depth += 1
-
-                    // If we have a pending key, this object belongs to that key
-                    if let pendingKey = currentContext.pendingKey {
-                        // Save current context before going deeper
-                        contextStack.append(currentContext)
-
-                        // Create new context for nested object
-                        currentContext = Context()
-                        currentContext.path = contextStack.last?.path ?? []
-                        currentContext.path.append(pendingKey)
-                        currentContext.usedKeys = []
-                        currentContext.pendingKey = nil
-                    } else if depth > 1 {
-                        // Object inside array or anonymous object
-                        contextStack.append(currentContext)
-                        currentContext = Context()
-                        currentContext.path = contextStack.last?.path ?? []
-                    }
-
-                    position = .beforeFirstKey
-
-                case "}":
-                    depth -= 1
-
-                    // Restore previous context
-                    if !contextStack.isEmpty {
-                        currentContext = contextStack.removeLast()
-                    }
-
-                    if depth == 0 {
-                        position = .complete
-                    } else {
-                        position = .afterValue
-                    }
-
-                    // Clear pending key as we've exited the object
-                    currentContext.pendingKey = nil
-
-                case "[":
-                    depth += 1
-
-                    // If we have a pending key, this array belongs to that key
-                    if let pendingKey = currentContext.pendingKey {
-                        // Save current context
-                        contextStack.append(currentContext)
-
-                        // Create new context for array
-                        currentContext = Context()
-                        currentContext.path = contextStack.last?.path ?? []
-                        currentContext.path.append(pendingKey)
-                        currentContext.path.append("0")  // Array index
-                        currentContext.usedKeys = []
-                        currentContext.pendingKey = nil
-                    }
-
-                    position = .afterColon  // Arrays expect values
-
-                case "]":
-                    depth -= 1
-
-                    // Restore previous context
-                    if !contextStack.isEmpty {
-                        currentContext = contextStack.removeLast()
-                    }
-
-                    position = .afterValue
-
-                case "\"":
+            switch char {
+            case "\"":
+                if !inString {
                     inString = true
                     if position == .beforeFirstKey || position == .afterComma {
-                        inKey = true
+                        isKey = true
                         currentKey = ""
                         position = .insideKey
                     } else if position == .afterColon {
                         position = .insideStringValue
                     }
+                } else {
+                    inString = false
+                    if isKey {
+                        isKey = false
+                        position = .afterKey
+                    } else if position == .insideStringValue {
+                        position = .afterValue
+                    }
+                }
 
-                case ":":
+            case ":":
+                if !inString && position == .afterKey {
                     position = .afterColon
+                    // Add current key to path temporarily
+                    path.append(currentKey)
+                }
 
-                case ",":
-                    position = .afterComma
-                    // Clear pending key if value was not object/array
-                    currentContext.pendingKey = nil
+            case ",":
+                if !inString {
+                    if position == .afterValue {
+                        position = .afterComma
+                        // Mark the last key as used and remove from path
+                        if !path.isEmpty {
+                            usedKeys.insert(path.removeLast())
+                        }
+                    }
+                }
 
-                case " ", "\t", "\n", "\r":
-                    break  // Skip whitespace
+            case "{":
+                if !inString {
+                    depth += 1
+                    if depth == 1 {
+                        position = .beforeFirstKey
+                    } else if position == .afterColon {
+                        // Entering nested object
+                        position = .beforeFirstKey
+                    }
+                }
 
-                default:
-                    // Handle numbers, booleans, null
+            case "}":
+                if !inString {
+                    depth -= 1
+                    if depth == 0 {
+                        position = .complete
+                    } else {
+                        position = .afterValue
+                        // Pop the current object from path
+                        if !path.isEmpty && !arrayDepths.contains(path.count) {
+                            usedKeys.insert(path.removeLast())
+                        }
+                    }
+                }
+
+            case "[":
+                if !inString && position == .afterColon {
+                    // Mark this depth as array
+                    arrayDepths.insert(path.count)
+                    path.append("0")  // Array index
+                }
+
+            case "]":
+                if !inString {
+                    position = .afterValue
+                    // Remove array index from path
+                    if !path.isEmpty && arrayDepths.contains(path.count) {
+                        arrayDepths.remove(path.count)
+                        path.removeLast()
+                    }
+                }
+
+            default:
+                if inString && isKey {
+                    currentKey.append(char)
+                } else if !inString {
+                    // Handle non-string values
                     if position == .afterColon {
                         if char.isNumber || char == "-" {
                             position = .insideNumberValue
@@ -235,99 +225,25 @@ public struct JSONSchemaContextDetector {
                         } else if char == "n" {
                             position = .insideNullValue
                         }
-                        // Clear pending key for primitive values
-                        currentContext.pendingKey = nil
-                    }
-                }
-            } else {
-                // Inside a string
-                if char == "\"" {
-                    inString = false
-                    if inKey {
-                        inKey = false
-                        // Key completed
-                        currentContext.usedKeys.append(currentKey)
-                        currentContext.pendingKey = currentKey
-                        position = .afterKey
-                    } else {
-                        // String value completed
-                        position = .afterValue
-                        currentContext.pendingKey = nil
-                    }
-                } else {
-                    if inKey {
-                        currentKey.append(char)
                     }
                 }
             }
-
-            i = partialJSON.index(after: i)
         }
 
-        // Handle incomplete states
-        if inString && inKey {
-            position = .insideKey
+        // Handle incomplete key
+        if isKey && !currentKey.isEmpty {
+            path.append(currentKey)
         }
 
-        let finalPath = JSONPath(currentContext.path)
-        let finalUsedKeys = Set(currentContext.usedKeys)
-
-        return (position, finalPath, finalUsedKeys)
+        return (position, JSONPath(path), usedKeys)
     }
 
-    /// Check if keys should be shown at this position
-    private func shouldShowKeys(at position: JSONPosition) -> Bool {
-        switch position {
-        case .beforeFirstKey, .afterComma:
-            return true
-        default:
-            return false
+    private func getSchemaNode(at path: JSONPath) -> SchemaNode? {
+        // Convert path to schema path and get node
+        let schemaPath = path.schemaPath
+        if schemaPath.isEmpty {
+            return schemaNode
         }
-    }
-
-    /// Get schema node for a given path
-    private func getSchemaNode(at path: JSONPath) -> [String: Any]? {
-        var currentNode = schema
-
-        for segment in path.segments {
-            // Skip array indices
-            if Int(segment) != nil {
-                continue
-            }
-
-            // Navigate to nested object or array
-            if let properties = currentNode["properties"] as? [String: Any],
-               let nextNode = properties[segment] as? [String: Any] {
-
-                if nextNode["type"] as? String == "array",
-                   let items = nextNode["items"] as? [String: Any] {
-                    currentNode = items
-                } else {
-                    currentNode = nextNode
-                }
-            } else {
-                return nil
-            }
-        }
-
-        return currentNode
-    }
-
-    /// Extract keys from a schema node
-    private func extractKeys(from schemaNode: [String: Any]?) -> [String] {
-        guard let node = schemaNode,
-              let properties = node["properties"] as? [String: Any] else {
-            return []
-        }
-
-        return Array(properties.keys)
-    }
-}
-
-// MARK: - Character Extension
-
-private extension Character {
-    var isNumber: Bool {
-        return self >= "0" && self <= "9"
+        return schemaNode.node(atSchemaPath: schemaPath)
     }
 }

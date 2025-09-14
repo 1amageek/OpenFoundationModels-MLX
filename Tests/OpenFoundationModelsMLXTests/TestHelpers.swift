@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import OpenFoundationModels
 @testable import OpenFoundationModelsMLX
 
 // MARK: - Mock Tokenizer Implementations
@@ -76,7 +77,7 @@ public final class CharacterTokenizer: TokenizerAdapter, @unchecked Sendable {
 }
 
 /// Configurable mock tokenizer for testing specific behaviors
-public final class ConfigurableTokenizer: TokenizerAdapter, @unchecked Sendable {
+public class ConfigurableTokenizer: TokenizerAdapter, @unchecked Sendable {
     public var nextDecodeResult: String = ""
     public var nextChar: String = ""
 
@@ -107,8 +108,7 @@ public final class ConfigurableTokenizer: TokenizerAdapter, @unchecked Sendable 
 
 public enum TestSchemas {
     /// CompanyProfile schema used in multiple tests
-    @MainActor
-    public static let companyProfileSchema: [String: Any] = [
+    nonisolated(unsafe) public static let companyProfileSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "name": ["type": "string"],
@@ -174,7 +174,6 @@ public enum TestSchemas {
     ]
 
     /// Nested schemas for CompanyProfile
-    @MainActor
     public static let companyProfileNestedSchemas = [
         "headquarters": ["city", "country", "postalCode", "street"],
         "departments[]": ["headCount", "manager", "name", "projects", "type"],
@@ -183,12 +182,10 @@ public enum TestSchemas {
     ]
 
     /// Root keys for CompanyProfile
-    @MainActor
     public static let companyProfileRootKeys = ["departments", "employeeCount", "founded", "headquarters", "name", "type"]
 
     /// Simple user schema
-    @MainActor
-    public static let userSchema: [String: Any] = [
+    nonisolated(unsafe) public static let userSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "name": ["type": "string"],
@@ -198,8 +195,7 @@ public enum TestSchemas {
     ]
 
     /// Simple product schema
-    @MainActor
-    public static let productSchema: [String: Any] = [
+    nonisolated(unsafe) public static let productSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "id": ["type": "integer"],
@@ -238,6 +234,31 @@ public final class TestKeyDetectionProcessor {
             return String(generatedText[jsonStart...])
         }
         return ""
+    }
+}
+
+// MARK: - Mock ModelCard
+
+/// Simple mock ModelCard for testing
+public struct MockModelCard: ModelCard {
+    public let id: String
+    public let alwaysActivate: Bool
+
+    public init(id: String = "mock-model", alwaysActivate: Bool = true) {
+        self.id = id
+        self.alwaysActivate = alwaysActivate
+    }
+
+    public var params: GenerateParameters {
+        GenerateParameters(maxTokens: 100, temperature: 0.7)
+    }
+
+    public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
+        return Prompt.system("Test prompt")
+    }
+
+    public func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool {
+        return alwaysActivate
     }
 }
 

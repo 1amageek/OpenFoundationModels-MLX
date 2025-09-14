@@ -8,6 +8,9 @@ import MLXLLM
 /// Uses the same format as Ollama's implementation
 public struct GPTOSSModelCard: ModelCard {
     public let id: String
+
+    // Debug flag - can be set via environment variable
+    private static let isDebugMode = ProcessInfo.processInfo.environment["DEBUG_MODELCARD"] != nil
     
     public init(id: String = "lmstudio-community/gpt-oss-20b-MLX-8bit") {
         self.id = id
@@ -85,18 +88,35 @@ public struct GPTOSSModelCard: ModelCard {
             // Find the last channel marker to determine current channel
             if let lastChannelRange = raw.range(of: "<|channel|>", options: .backwards) {
                 let afterChannel = String(raw[lastChannelRange.upperBound...])
-                
+
                 // Check which channel we're in
                 if afterChannel.hasPrefix("final") {
                     // We're in the final channel, activate key detection
+                    if Self.isDebugMode {
+                        print("[GPTOSSModelCard] ✅ In 'final' channel - activating KeyDetectionLogitProcessor")
+                    }
                     return true
                 } else if afterChannel.hasPrefix("analysis") {
                     // We're in the analysis channel, don't constrain
+                    if Self.isDebugMode {
+                        print("[GPTOSSModelCard] ⏸️ In 'analysis' channel - skipping constraints")
+                    }
                     return false
+                } else {
+                    // Unknown channel
+                    if Self.isDebugMode {
+                        let preview = String(afterChannel.prefix(20))
+                        print("[GPTOSSModelCard] ❓ Unknown channel content: '\(preview)...'")
+                    }
+                }
+            } else {
+                // No channel found yet, don't activate
+                if Self.isDebugMode {
+                    let preview = String(raw.suffix(50))
+                    print("[GPTOSSModelCard] ⏳ No channel marker found yet. Last 50 chars: '\(preview)'")
                 }
             }
-            
-            // No channel found yet, don't activate
+
             return false
         }
         

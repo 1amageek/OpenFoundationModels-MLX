@@ -1,13 +1,32 @@
 import Foundation
 import MLX
+import MLXNN
 import MLXLMCommon
+import Synchronization
 
 /// LogitProcessor that detects and logs JSON key generation with context-aware schema validation
-/// Uses JSONSchemaContextDetector for accurate context detection
-public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendable {
+/// Uses JSONSchemaContextDetector with SchemaNode for type-safe schema handling
+public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
 
     // MARK: - Nested Types
 
+    /// Information about logit probabilities at a generation step
+    struct LogitInfo {
+        let step: Int
+        let vocabSize: Int
+        let topCandidates: [Candidate]
+        let entropy: Float
+        var selectedToken: Int32?
+        let contextPath: String        // Current context path when this was generated
+        let contextKeys: [String]      // Available keys at this context
+
+        struct Candidate {
+            let tokenId: Int32
+            let probability: Float
+            let logit: Float
+            let text: String?
+        }
+    }
 
     // MARK: - Properties
 
@@ -15,46 +34,42 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     private let verbose: Bool
     private let topK: Int
     private let showProbabilities: Bool
-    private let modelCard: (any ModelCard)?
-    private let jsonSchema: [String: Any]?
-    private var schemaDetector: JSONSchemaContextDetector?
+    private let modelCard: any ModelCard
+    private let schemaNode: SchemaNode
+    private let schemaDetector: JSONSchemaContextDetector
 
-    // Core state management
-    private var jsonExtractor = JSONExtractor()
-    private var generatedText = ""
-    private var detectedKeys: [String] = []
-    private var stepCount: Int = 0
-    private var isActive: Bool = false
+    // Core state management - protected by Mutex
+    private struct MutableState {
+        var jsonExtractor = JSONExtractor()
+        var generatedText = ""
+        var detectedKeys: [String] = []
+        var stepCount: Int = 0
+        var lastWasInKeyGeneration: Bool = false
+        var pendingLogitInfo: LogitInfo? = nil
+    }
+
+    private let state = Mutex(MutableState())
 
     // Public access for testing
     public var allDetectedKeys: [String] {
-        return detectedKeys
+        return state.withLock { $0.detectedKeys }
     }
-
-    // Logit analysis state
-    private var lastWasInKeyGeneration: Bool = false
 
     // MARK: - Initialization
 
     public init(
         tokenizer: TokenizerAdapter,
-        modelCard: (any ModelCard)? = nil,
+        modelCard: any ModelCard,
         schemaKeys: [String]? = nil,
         nestedSchemas: [String: [String]]? = nil,
         verbose: Bool = true,
         topK: Int = 5,
         showProbabilities: Bool = true
     ) {
-        self.tokenizer = tokenizer
-        self.modelCard = modelCard
-        self.verbose = verbose
-        self.topK = topK
-        self.showProbabilities = showProbabilities
-        self.isActive = (modelCard == nil)
-
-        // Convert old schema format to new JSON Schema format if provided
+        // Build schema first
+        let schemaNode: SchemaNode
         if let rootKeys = schemaKeys {
-            var schema: [String: Any] = [
+            var tempSchema: [String: Any] = [
                 "type": "object",
                 "properties": [:]
             ]
@@ -102,46 +117,81 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
                 }
             }
 
-            schema["properties"] = properties
-            self.jsonSchema = schema
-            self.schemaDetector = JSONSchemaContextDetector(schema: schema)
+            tempSchema["properties"] = properties
+            schemaNode = SchemaNode.from(jsonSchema: tempSchema)
         } else {
             // Even if no schema keys provided, create empty schema
-            let emptySchema: [String: Any] = [
-                "type": "object",
-                "properties": [:]
-            ]
-            self.jsonSchema = emptySchema
-            self.schemaDetector = JSONSchemaContextDetector(schema: emptySchema)
+            schemaNode = SchemaNode(kind: .object)
         }
+
+        // Initialize all properties
+        self.tokenizer = tokenizer
+        self.modelCard = modelCard
+        self.verbose = verbose
+        self.topK = topK
+        self.showProbabilities = showProbabilities
+        self.schemaNode = schemaNode
+        self.schemaDetector = JSONSchemaContextDetector(schema: schemaNode)
+
+        // ModelCard is now required, no need for isActive flag
     }
 
     // Alternative init with direct JSON Schema
     public init(
         tokenizer: TokenizerAdapter,
         jsonSchema: [String: Any],
-        modelCard: (any ModelCard)? = nil,
+        modelCard: any ModelCard,
         verbose: Bool = true,
         topK: Int = 5,
         showProbabilities: Bool = true
     ) {
         self.tokenizer = tokenizer
-        self.jsonSchema = jsonSchema
+        self.schemaNode = SchemaNode.from(jsonSchema: jsonSchema)
         self.modelCard = modelCard
         self.verbose = verbose
         self.topK = topK
         self.showProbabilities = showProbabilities
-        self.isActive = (modelCard == nil)
+        self.schemaDetector = JSONSchemaContextDetector(schema: self.schemaNode)
 
-        // Always initialize schemaDetector
-        self.schemaDetector = JSONSchemaContextDetector(schema: jsonSchema)
+        // ModelCard is now required, no need for isActive flag
 
         if verbose {
             print("[KeyDetection] Initialized with JSON Schema")
-            if let properties = jsonSchema["properties"] as? [String: Any] {
-                print("[KeyDetection] Root keys: \(properties.keys.sorted())")
-            } else if !jsonSchema.isEmpty {
+            let rootKeys = self.schemaNode.objectKeys
+            if !rootKeys.isEmpty {
+                print("[KeyDetection] Root keys: \(rootKeys)")
+            } else {
                 print("[KeyDetection] WARNING: No properties in JSON Schema!")
+            }
+        }
+    }
+
+    // Init with SchemaNode directly (preferred for type safety)
+    public init(
+        tokenizer: TokenizerAdapter,
+        schemaNode: SchemaNode,
+        modelCard: any ModelCard,
+        verbose: Bool = true,
+        topK: Int = 5,
+        showProbabilities: Bool = true
+    ) {
+        self.tokenizer = tokenizer
+        self.schemaNode = schemaNode
+        self.modelCard = modelCard
+        self.verbose = verbose
+        self.topK = topK
+        self.showProbabilities = showProbabilities
+        self.schemaDetector = JSONSchemaContextDetector(schema: schemaNode)
+
+        // ModelCard is now required, no need for isActive flag
+
+        if verbose {
+            print("[KeyDetection] Initialized with SchemaNode")
+            let rootKeys = schemaNode.objectKeys
+            if !rootKeys.isEmpty {
+                print("[KeyDetection] Root keys: \(rootKeys)")
+            } else {
+                print("[KeyDetection] WARNING: No properties in schema!")
             }
         }
     }
@@ -150,11 +200,14 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
 
     public func prompt(_ prompt: MLXArray) {
         // Reset all state for new generation
-        jsonExtractor.reset()
-        generatedText = ""
-        detectedKeys = []
-        stepCount = 0
-        lastWasInKeyGeneration = false
+        state.withLock { state in
+            state.jsonExtractor.reset()
+            state.generatedText = ""
+            state.detectedKeys = []
+            state.stepCount = 0
+            state.lastWasInKeyGeneration = false
+            state.pendingLogitInfo = nil
+        }
 
         if verbose {
             print("\n===== 🚀 Generation Started =====")
@@ -169,106 +222,135 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
     }
 
     public func process(logits: MLXArray) -> MLXArray {
-        stepCount += 1
-
-        // Check if we should be active
-        if !shouldBeActive() {
-            return logits
+        let (stepCount, isInJSON, lastWasInKeyGeneration, pendingInfo) = state.withLock { state in
+            state.stepCount += 1
+            let pending = state.pendingLogitInfo
+            return (state.stepCount, state.jsonExtractor.isInJSON, state.lastWasInKeyGeneration, pending)
         }
 
-        // Display logit info if verbose and in JSON
-        if verbose && showProbabilities && jsonExtractor.isInJSON {
-            displayStepInfo(from: logits, step: stepCount, isKey: lastWasInKeyGeneration)
+        // Display any pending logit info from previous step
+        if let pending = pendingInfo {
+            if verbose && showProbabilities {
+                // Context keys are already saved in LogitInfo
+                displayStep(pending, isKey: lastWasInKeyGeneration, contextKeys: [])
+            }
+            state.withLock { $0.pendingLogitInfo = nil }
+        }
+
+        // Always save current logit info for display in next step
+        // This ensures we show entropy for all steps, not just key generation
+        if isInJSON {
+            let logitInfo = buildLogitInfo(from: logits, step: stepCount)
+            state.withLock { $0.pendingLogitInfo = logitInfo }
         }
 
         return logits
     }
 
     public func didSample(token: MLXArray) {
-        guard shouldBeActive() else { return }
+        // Always process for observation, regardless of constraint mode
 
         let tokenId = token.item(Int32.self)
         let text = tokenizer.decode([tokenId])
-        generatedText += text
 
-        // Track previous phase for key detection
-        var previousPhase: JSONStateMachine.Phase? = nil
+        state.withLock { state in
+            state.generatedText += text
 
-        // Process each character in the decoded text
-        for char in text {
-            // Get phase before processing
-            if jsonExtractor.isInJSON {
-                previousPhase = jsonExtractor.getCurrentPhase()
-            }
+            // Track previous phase for key detection
+            var previousPhase: JSONStateMachine.Phase? = nil
 
-            // Try to extract JSON - now handles multiple JSONs automatically
-            let shouldProcess = jsonExtractor.processCharacter(char)
+            // Process each character in the decoded text
+            for char in text {
+                // Get phase before processing
+                if state.jsonExtractor.isInJSON {
+                    previousPhase = state.jsonExtractor.getCurrentPhase()
+                }
 
-            if shouldProcess && jsonExtractor.isInJSON {
-                // Get current phase after processing
-                let currentPhase = jsonExtractor.getCurrentPhase()
+                // Try to extract JSON - now handles multiple JSONs automatically
+                let shouldProcess = state.jsonExtractor.processCharacter(char)
 
-                // Handle key detection - check if we transitioned from key to colon
-                if let prevPhase = previousPhase {
-                    if case .inString(.body(kind: .key, escaped: false)) = prevPhase {
-                        if case .inObject(.expectColon) = currentPhase {
-                            // Key just completed - use the accumulated key from JSONExtractor
-                            let keyName = extractCurrentKey()
-                            if !keyName.isEmpty {
-                                detectedKeys.append(keyName)
+                if shouldProcess && state.jsonExtractor.isInJSON {
+                    // Get current phase after processing
+                    let currentPhase = state.jsonExtractor.getCurrentPhase()
 
-                                if verbose {
-                                    printKeyDetection(keyName)
+                    // Handle key detection - check if we transitioned from key to colon
+                    if let prevPhase = previousPhase {
+                        if case .inString(.body(kind: .key, escaped: false)) = prevPhase {
+                            if case .inObject(.expectColon) = currentPhase {
+                                // Key just completed - use the accumulated key from JSONExtractor
+                                let keyName = extractCurrentKey(from: state.generatedText)
+                                if !keyName.isEmpty {
+                                    state.detectedKeys.append(keyName)
+
+                                    if verbose {
+                                        let level = state.jsonExtractor.getNestingLevel()
+                                        printKeyDetection(keyName, level: level)
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // Update key generation state based on current phase
-                switch currentPhase {
-                case .inObject(.expectKeyFirstQuote),
-                     .inObject(.inKey),
-                     .inString(.body(kind: .key, _)):
-                    lastWasInKeyGeneration = true
-                default:
-                    lastWasInKeyGeneration = false
+                    // Update key generation state based on current phase
+                    switch currentPhase {
+                    case .inObject(.expectKeyFirstQuote),
+                         .inObject(.inKey),
+                         .inString(.body(kind: .key, _)):
+                        state.lastWasInKeyGeneration = true
+                    default:
+                        state.lastWasInKeyGeneration = false
+                    }
+                } else {
+                    state.lastWasInKeyGeneration = false
                 }
-            } else {
-                lastWasInKeyGeneration = false
             }
-        }
 
-        // Show selected token info only for key generation
-        if verbose && showProbabilities && jsonExtractor.isInJSON && lastWasInKeyGeneration {
-            let displayText = formatTokenForDisplay(text)
-            print("✅ [\(tokenId)] → \"\(displayText)\" 🔑 KEY TOKEN")
-        }
+            // Show selected token info only for key generation
+            if verbose && showProbabilities && state.jsonExtractor.isInJSON && state.lastWasInKeyGeneration {
+                let displayText = formatTokenForDisplay(text)
+                print("✅ [\(tokenId)] → \"\(displayText)\" 🔑 KEY TOKEN")
+  
+                let currentPhase = state.jsonExtractor.getCurrentPhase()
 
-        // Always display available keys when in JSON and about to generate or generating a key
-        if jsonExtractor.isInJSON {
-            let currentPhase = jsonExtractor.getCurrentPhase()
+                // Display constraints when we're generating a key (including in the middle of a key)
+                switch currentPhase {
+                case .inObject(.expectKeyFirstQuote), .inObject(.inKey), .inString(.body(kind: .key, _)):
+                    let partialJSON = extractPartialJSON(from: state.generatedText)
+                    let availableKeys = getCurrentAvailableKeys(from: state.generatedText)
 
-            // Display constraints when we're generating a key (including in the middle of a key)
-            switch currentPhase {
-            case .inObject(.expectKeyFirstQuote), .inObject(.inKey), .inString(.body(kind: .key, _)):
-                let partialJSON = extractPartialJSON()
-                let availableKeys = getCurrentAvailableKeys()
+                    // Include entropy if available from pending logit info
+                    if let pendingInfo = state.pendingLogitInfo {
+                        let entropyDesc = entropyDescription(pendingInfo.entropy)
+                        print("\n📋 [Entropy: \(String(format: "%.2f", pendingInfo.entropy)) (\(entropyDesc))] Available keys: [\(availableKeys.joined(separator: ", "))]")
+                    } else {
+                        print("\n📋 Available keys at current context: [\(availableKeys.joined(separator: ", "))]")
+                    }
 
-                print("\n📋 Available keys at current context: [\(availableKeys.joined(separator: ", "))]")
-
-                // Show the current partial JSON position
-                let preview = partialJSON.suffix(80)
-                if !preview.isEmpty {
-                    print("   Current position: ...\(preview)")
+                    // Show the current partial JSON position
+                    let preview = partialJSON.suffix(80)
+                    if !preview.isEmpty {
+                        print("   Current position: ...\(preview)")
+                    }
+                default:
+                    break
                 }
-            default:
-                break
             }
         }
     }
 
     public func finish() {
+        // Display any pending logit info
+        let (pendingInfo, lastWasInKeyGeneration, detectedKeys) = state.withLock { state in
+            (state.pendingLogitInfo, state.lastWasInKeyGeneration, state.detectedKeys)
+        }
+
+        if let pending = pendingInfo {
+            if verbose && showProbabilities {
+                // Context keys are already saved in LogitInfo
+                displayStep(pending, isKey: lastWasInKeyGeneration, contextKeys: [])
+            }
+            state.withLock { $0.pendingLogitInfo = nil }
+        }
 
         if verbose {
             print("\n[KeyDetection] Generation completed")
@@ -281,30 +363,26 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
 
     // MARK: - Private Methods
 
-    private func shouldBeActive() -> Bool {
-        if let card = modelCard {
-            return card.isKeyDetectionEnabled ?? false
-        }
-        return isActive
+    private func shouldApplyConstraints() -> Bool {
+        let generatedText = state.withLock { $0.generatedText }
+        return modelCard.shouldActivateProcessor(generatedText, processor: self)
     }
 
-    private func getCurrentAvailableKeys() -> [String] {
-        // Use JSONSchemaContextDetector to get available keys
-        guard let detector = schemaDetector else {
-            // This should never happen since we always initialize schemaDetector
-            print("[KeyDetection] FATAL: schemaDetector is nil!")
-            return []
-        }
-
+    private func getCurrentAvailableKeys(from generatedText: String) -> [String] {
         // Get the partial JSON generated so far
-        let partialJSON = extractPartialJSON()
+        let partialJSON = extractPartialJSON(from: generatedText)
 
         // Get available keys from the detector
-        let keys = detector.getAvailableKeys(from: partialJSON)
+        let keys = schemaDetector.getAvailableKeys(from: partialJSON)
         return keys
     }
 
-    private func extractPartialJSON() -> String {
+    private func getCurrentAvailableKeys() -> [String] {
+        let generatedText = state.withLock { $0.generatedText }
+        return getCurrentAvailableKeys(from: generatedText)
+    }
+
+    private func extractPartialJSON(from generatedText: String) -> String {
         // Find the start of JSON in generated text
         if let jsonStart = generatedText.firstIndex(of: "{") {
             return String(generatedText[jsonStart...])
@@ -312,14 +390,17 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         return ""
     }
 
-    private func extractCurrentKey() -> String {
+    private func extractPartialJSON() -> String {
+        let generatedText = state.withLock { $0.generatedText }
+        return extractPartialJSON(from: generatedText)
+    }
+
+    private func extractCurrentKey(from generatedText: String) -> String {
         // Extract the key from the current position in the JSON
         // Look for the most recent quote-delimited string before the current position
-        let partialJSON = extractPartialJSON()
+        let partialJSON = extractPartialJSON(from: generatedText)
 
         // Find the last opening quote for a key
-        var keyStart: String.Index? = nil
-        var keyEnd: String.Index? = nil
         var inString = false
         var escaped = false
         var currentKey = ""
@@ -347,12 +428,10 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
                 if !inString {
                     // Start of a string
                     inString = true
-                    keyStart = strIndex
                     currentKey = ""
                 } else {
                     // End of a string
                     inString = false
-                    keyEnd = strIndex
 
                     // Check if this is followed by a colon (making it a key)
                     var foundColon = false
@@ -386,9 +465,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         return ""
     }
 
-    private func printKeyDetection(_ keyName: String) {
-        let level = jsonExtractor.getNestingLevel()
-
+    private func printKeyDetection(_ keyName: String, level: Int) {
         if level == 0 {
             print("[KeyDetection] 🔑 Root key: \"\(keyName)\"")
         } else {
@@ -397,9 +474,9 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         }
     }
 
-    // MARK: - Display Helpers
+    // MARK: - Logit Analysis
 
-    private func displayStepInfo(from logits: MLXArray, step: Int, isKey: Bool) {
+    private func buildLogitInfo(from logits: MLXArray, step: Int) -> LogitInfo {
         let vocabSize = logits.dim(logits.ndim - 1)
 
         var logits = logits
@@ -411,14 +488,22 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         let candidates = extractTopCandidates(logits: logits, probs: probs, k: topK)
         let entropy = calculateEntropy(probs: probs)
 
-        // Get current available keys
-        let availableKeys = getCurrentAvailableKeys()
+        // Get current context
+        let currentPath = "" // Will be filled from context tracking
+        let currentKeys = getCurrentAvailableKeys()
 
-        // Display the info
-        displayStep(step: step, entropy: entropy, availableKeys: availableKeys, topCandidates: candidates, isKey: isKey)
+        return LogitInfo(
+            step: step,
+            vocabSize: vocabSize,
+            topCandidates: candidates,
+            entropy: entropy,
+            selectedToken: nil,
+            contextPath: currentPath,
+            contextKeys: currentKeys
+        )
     }
 
-    private func extractTopCandidates(logits: MLXArray, probs: MLXArray, k: Int) -> [(tokenId: Int32, probability: Float, logit: Float, text: String?)] {
+    private func extractTopCandidates(logits: MLXArray, probs: MLXArray, k: Int) -> [LogitInfo.Candidate] {
         let sortedIndices = argSort(probs, axis: -1)
         let vocabSize = logits.dim(logits.ndim - 1)
         let effectiveK = min(k, vocabSize)
@@ -429,21 +514,23 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
 
         let allIndices = sortedIndices.asArray(Int32.self)
         let topIndices = Array(allIndices.suffix(effectiveK))
-        let probsArray = probs.asArray(Float.self)
-        let logitsArray = logits.asArray(Float.self)
+        let allProbs = probs.asArray(Float.self)
+        let allLogits = logits.asArray(Float.self)
 
-        return topIndices.reversed().map { tokenId in
-            (tokenId: tokenId,
-             probability: probsArray[Int(tokenId)],
-             logit: logitsArray[Int(tokenId)],
-             text: tokenizer.decode([tokenId]))
+        return topIndices.reversed().map { index in
+            LogitInfo.Candidate(
+                tokenId: index,
+                probability: allProbs[Int(index)],
+                logit: allLogits[Int(index)],
+                text: tokenizer.decode([index])
+            )
         }
     }
 
     private func calculateEntropy(probs: MLXArray) -> Float {
         let epsilon: Float = 1e-10
         let clippedProbs = probs + epsilon
-        let logProbs = log(clippedProbs)
+        let logProbs = MLX.log(clippedProbs)
         let entropy = -sum(probs * logProbs, axis: -1)
 
         entropy.eval()
@@ -456,22 +543,35 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         return max(0.0, result)
     }
 
-    private func displayStep(step: Int, entropy: Float, availableKeys: [String], topCandidates: [(tokenId: Int32, probability: Float, logit: Float, text: String?)], isKey: Bool) {
-        // Only display entropy for key generation
-        guard isKey else { return }
+    // MARK: - Display Helpers
 
-        // Build constraint display for key generation context
-        let constraintDisplay: String
-        if !availableKeys.isEmpty {
-            constraintDisplay = " [\(availableKeys.joined(separator: ", "))]"
-        } else {
-            constraintDisplay = " []"
+    private func displayStep(_ info: LogitInfo, isKey: Bool, contextKeys: [String]) {
+        // Build status markers and context information
+        var statusMarker = ""
+
+        // Use the context keys that were saved with the LogitInfo
+        let actualContextKeys = info.contextKeys  // Use saved context, not passed parameter
+
+        // Always show context keys when we're about to generate a key
+        if isKey {
+            statusMarker = " 🔑 KEY"
+            if !actualContextKeys.isEmpty {
+                let constraintList = actualContextKeys.joined(separator: ", ")
+                statusMarker += " [Available: \(constraintList)]"
+            } else {
+                statusMarker += " [No schema constraints]"
+            }
         }
 
-        let entropyStr = entropy.isNaN ? "0.00" : String(format: "%.2f", entropy)
-        print("\n[Step \(step)] Entropy: \(entropyStr) (\(entropyDescription(entropy)))\(constraintDisplay)")
+        // Show context path if not at root
+        if !info.contextPath.isEmpty {
+            statusMarker += " @\(info.contextPath)"
+        }
 
-        for (index, candidate) in topCandidates.prefix(min(5, topK)).enumerated() {
+        let entropyStr = info.entropy.isNaN ? "0.00" : String(format: "%.2f", info.entropy)
+        print("\n[Step \(info.step)] Entropy: \(entropyStr) (\(entropyDescription(info.entropy)))\(statusMarker)")
+
+        for (index, candidate) in info.topCandidates.prefix(min(5, topK)).enumerated() {
             let probValue = String(format: "%.1f%%", candidate.probability * 100)
             let text = candidate.text ?? "<unknown>"
             let displayText = formatTokenForDisplay(text)
@@ -482,49 +582,26 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, @unchecked Sendab
         }
     }
 
+
     private func formatTokenForDisplay(_ text: String) -> String {
-        if text == "\n" {
-            return "↵"
-        } else if text == "\t" {
-            return "→"
-        } else if text == " " {
-            return "␣"
-        } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "⎵"
-        } else {
-            return String(text.prefix(20))
-                .replacingOccurrences(of: "\n", with: "\\n")
-                .replacingOccurrences(of: "\t", with: "\\t")
-        }
+        text.replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 
-    private func entropyDescription(_ entropy: Float) -> String {
-        if entropy.isNaN {
-            return "🟢 Perfect Confidence (100%)"
-        }
 
+    private func entropyDescription(_ entropy: Float) -> String {
         switch entropy {
-        case ..<0.01:
-            return "🟢 Perfect Confidence"
-        case 0.01..<0.5:
+        case ..<0.5:
             return "🟢 Very Confident"
         case 0.5..<1.5:
             return "🟡 Confident"
         case 1.5..<3.0:
-            return "🟠 Moderate"
+            return "🟠 Somewhat Uncertain"
         case 3.0..<5.0:
             return "🔴 Uncertain"
         default:
             return "⚫ Very Uncertain"
         }
-    }
-}
-
-// MARK: - ModelCard Extension
-
-extension ModelCard {
-    var isKeyDetectionEnabled: Bool? {
-        // This can be customized per model card
-        return true
     }
 }

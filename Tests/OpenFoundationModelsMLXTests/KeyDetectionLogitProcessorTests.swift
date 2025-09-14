@@ -10,8 +10,9 @@ struct KeyDetectionLogitProcessorTests {
     @Test("Detects keys in simple object")
     func testSimpleObjectKeyDetection() {
         // Create a mock tokenizer
-        let tokenizer = MockTokenizerAdapter()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let tokenizer = ConfigurableTokenizer()
+        let modelCard = MockModelCard()
+        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         // Simulate JSON generation token by token
         let jsonString = #"{"name":"John","age":30}"#
@@ -33,8 +34,9 @@ struct KeyDetectionLogitProcessorTests {
     
     @Test("Detects keys in nested objects")
     func testNestedObjectKeyDetection() {
-        let tokenizer = MockTokenizerAdapter()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let tokenizer = ConfigurableTokenizer()
+        let modelCard = MockModelCard()
+        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         let jsonString = #"{"user":{"firstName":"Alice","lastName":"Smith"},"active":true}"#
         
@@ -58,8 +60,9 @@ struct KeyDetectionLogitProcessorTests {
     
     @Test("Detects keys in arrays with objects")
     func testArrayObjectKeyDetection() {
-        let tokenizer = MockTokenizerAdapter()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let tokenizer = ConfigurableTokenizer()
+        let modelCard = MockModelCard()
+        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         let jsonString = #"{"items":[{"id":1,"name":"Item1"},{"id":2,"name":"Item2"}],"total":2}"#
         
@@ -77,8 +80,9 @@ struct KeyDetectionLogitProcessorTests {
     
     @Test("Handles JSON with prefix text")
     func testJSONWithPrefix() {
-        let tokenizer = MockTokenizerAdapter()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let tokenizer = ConfigurableTokenizer()
+        let modelCard = MockModelCard()
+        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         let jsonString = "Here is the JSON response: {\"status\":\"success\",\"code\":200}"
         
@@ -96,8 +100,9 @@ struct KeyDetectionLogitProcessorTests {
     
     @Test("Handles multi-character tokens")
     func testMultiCharacterTokens() {
-        let tokenizer = MockTokenizerAdapter()
-        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let tokenizer = ConfigurableTokenizer()
+        let modelCard = MockModelCard()
+        var processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         processor.prompt(MLXArray.zeros([1]))
         

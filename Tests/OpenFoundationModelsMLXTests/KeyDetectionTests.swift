@@ -12,7 +12,8 @@ struct KeyDetectionTests {
     @Test("Detect simple object keys")
     func detectSimpleKeys() {
         let tokenizer = MockTokenizer()
-        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let modelCard = MockModelCard()
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -62,7 +63,8 @@ struct KeyDetectionTests {
     @Test("Detect nested object keys")
     func detectNestedKeys() {
         let tokenizer = MockTokenizer()
-        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let modelCard = MockModelCard()
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -89,7 +91,8 @@ struct KeyDetectionTests {
     @Test("Track JSON parsing phases")
     func trackParsingPhases() {
         let tokenizer = MockTokenizer()
-        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let modelCard = MockModelCard()
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
 
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -120,7 +123,8 @@ struct KeyDetectionTests {
     @Test("Handle array with objects")
     func handleArrayWithObjects() {
         let tokenizer = MockTokenizer()
-        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let modelCard = MockModelCard()
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -144,7 +148,8 @@ struct KeyDetectionTests {
     @Test("Handle escape sequences in keys")
     func handleEscapeSequences() {
         let tokenizer = MockTokenizer()
-        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, verbose: false)
+        let modelCard = MockModelCard()
+        let processor = KeyDetectionLogitProcessor(tokenizer: tokenizer, modelCard: modelCard, verbose: false)
         
         // Initialize processor
         let prompt = MLX.zeros([1, 10])
@@ -279,8 +284,10 @@ struct KeyDetectionIntegrationTests {
         let rootKeys = TestSchemas.companyProfileRootKeys
 
         let tokenizer = CharacterTokenizer()
+        let modelCard = MockModelCard()
         let processor = KeyDetectionLogitProcessor(
             tokenizer: tokenizer,
+            modelCard: modelCard,
             schemaKeys: rootKeys,
             nestedSchemas: nestedSchemas,
             verbose: false,

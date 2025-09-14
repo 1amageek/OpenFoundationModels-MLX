@@ -90,6 +90,18 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
             }
 
             // Create key detection processor for JSON debugging with enhanced features
+            // ModelCard is required for KeyDetectionLogitProcessor
+            guard let modelCard = modelCard else {
+                print("[AdaptiveConstraintEngine] WARNING: ModelCard is required for KeyDetectionLogitProcessor")
+                mutex.withLock {
+                    $0.mode = .off
+                    $0.preparedSchema = nil
+                    $0.keyDetectionProcessor = nil
+                    $0.schemaProcessors = []
+                }
+                return
+            }
+
             let keyDetectionProcessor = KeyDetectionLogitProcessor(
                 tokenizer: tokenizerAdapter,
                 jsonSchema: jsonSchema,  // Pass JSON Schema format

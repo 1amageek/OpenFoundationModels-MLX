@@ -12,7 +12,8 @@ struct ProcessorActivationTests {
         let card = GPTOSSModelCard(id: "test-model")
 
         let mockProcessor = MockLogitProcessor()
-        let keyDetectionProcessor = KeyDetectionLogitProcessor(tokenizer: MockTokenizer(), verbose: false)
+        let modelCard = MockModelCard()
+        let keyDetectionProcessor = KeyDetectionLogitProcessor(tokenizer: MockTokenizer(), modelCard: modelCard, verbose: false)
         
         // Test activation in analysis channel
         let analysisText = "<|start|>assistant<|channel|>analysis<|message|>Let me think about this"
