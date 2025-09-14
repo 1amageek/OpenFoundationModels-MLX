@@ -86,7 +86,12 @@ public struct JSONSchemaContextDetector: Sendable {
         let availableKeys = node?.availableKeys() ?? []
 
         // Filter out already used keys
-        let remainingKeys = availableKeys.filter { !context.usedKeys.contains($0) }
+        var remainingKeys = availableKeys.filter { !context.usedKeys.contains($0) }
+
+        // If we're typing a partial key, filter by prefix
+        if context.position == .insideKey && !context.currentKey.isEmpty {
+            remainingKeys = remainingKeys.filter { $0.hasPrefix(context.currentKey) }
+        }
 
         return remainingKeys
     }
@@ -102,7 +107,7 @@ public struct JSONSchemaContextDetector: Sendable {
         }
     }
 
-    private func parseContext(from partialJSON: String) -> (position: JSONPosition, path: JSONPath, usedKeys: Set<String>) {
+    private func parseContext(from partialJSON: String) -> (position: JSONPosition, path: JSONPath, usedKeys: Set<String>, currentKey: String) {
         var position: JSONPosition = .invalid
         var path: [String] = []
         var usedKeys: Set<String> = []
@@ -232,10 +237,10 @@ public struct JSONSchemaContextDetector: Sendable {
 
         // Handle incomplete key
         if isKey && !currentKey.isEmpty {
-            path.append(currentKey)
+            // Don't add partial key to path
         }
 
-        return (position, JSONPath(path), usedKeys)
+        return (position, JSONPath(path), usedKeys, currentKey)
     }
 
     private func getSchemaNode(at path: JSONPath) -> SchemaNode? {

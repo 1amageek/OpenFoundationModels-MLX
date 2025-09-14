@@ -254,7 +254,7 @@ public struct MockModelCard: ModelCard {
     }
 
     public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
-        return Prompt.system("Test prompt")
+        return Prompt("Test prompt")
     }
 
     public func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool {
