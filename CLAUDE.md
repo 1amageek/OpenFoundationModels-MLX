@@ -24,6 +24,33 @@ swift run generable-test-cli
 swift package clean
 ```
 
+## Package Structure
+
+The project is organized into multiple libraries for better modularity:
+
+### Libraries
+
+**OpenFoundationModelsMLX** (Core)
+- Core MLX adapter implementing Apple's LanguageModel protocol
+- ADAPT system for constraint-based generation
+- Internal utilities with `package` visibility for cross-library use
+- Located in `Sources/OpenFoundationModelsMLX/`
+
+**OpenFoundationModelsMLXGPT**
+- GPT-specific model cards (GPTOSSModelCard)
+- HarmonyParser for GPT output format parsing
+- Located in `Sources/OpenFoundationModelsMLXGPT/`
+
+**OpenFoundationModelsMLXLlama**
+- Llama model cards (LlamaModelCard for Llama 2, Llama3ModelCard for Llama 3.2)
+- Support for various Llama format variations
+- Located in `Sources/OpenFoundationModelsMLXLlama/`
+
+**OpenFoundationModelsMLXUtils**
+- ModelLoader for downloading and caching models from Hugging Face
+- Shared utilities independent of specific model types
+- Located in `Sources/OpenFoundationModelsMLXUtils/`
+
 ## Architecture Overview
 
 ### Core Components
@@ -70,13 +97,49 @@ Tests are organized by component in `Tests/OpenFoundationModelsMLXTests/`:
 
 ## Model Support
 
-Model cards in `Public/ModelCards/` define model-specific configurations:
-- `LlamaModelCard`: Configuration for Llama models
-- `GPTOSSModelCard`: Configuration for GPT-OSS models
+Model cards define model-specific configurations and are organized by model family:
+
+**GPT Models** (in `OpenFoundationModelsMLXGPT`):
+- `GPTOSSModelCard`: Configuration for GPT-OSS models with Harmony format support
+
+**Llama Models** (in `OpenFoundationModelsMLXLlama`):
+- `LlamaModelCard`: Configuration for Llama 2 models
+- `Llama3ModelCard`: Configuration for Llama 3.2 models
 
 Each card specifies tokenizer requirements, special tokens, and model-specific generation parameters.
 
 ## Development Notes
+
+### Usage Example
+
+```swift
+import OpenFoundationModelsMLX
+import OpenFoundationModelsMLXGPT  // For GPT models
+import OpenFoundationModelsMLXLlama // For Llama models
+import OpenFoundationModelsMLXUtils // For ModelLoader
+
+// Load a model
+let loader = ModelLoader()
+let container = try await loader.loadModel("model-id")
+
+// Create a model card
+let card = GPTOSSModelCard(id: "model-id")
+// or
+let card = Llama3ModelCard(id: "model-id")
+
+// Initialize the language model
+let model = try await MLXLanguageModel(
+    modelContainer: container,
+    card: card
+)
+```
+
+### Access Control
+
+The project uses Swift's `package` access control for internal components that need to be shared between libraries but not exposed to external consumers:
+- `TranscriptAccess`: Internal transcript processing utilities
+- `Logger`: Internal logging utilities
+- `HarmonyParser`: GPT-specific output parser (package-level in GPT library)
 
 ### Dependencies
 - MLX Swift (via mlx-swift-examples): Core ML framework for Apple Silicon

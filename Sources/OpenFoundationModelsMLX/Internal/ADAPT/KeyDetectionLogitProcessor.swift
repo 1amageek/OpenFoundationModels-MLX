@@ -33,7 +33,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
     private let tokenizer: TokenizerAdapter
     private let verbose: Bool
     private let topK: Int
-    private let showProbabilities: Bool
     private let modelCard: any ModelCard
     private let schemaNode: SchemaNode
     private let schemaDetector: JSONSchemaContextDetector
@@ -129,7 +128,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
         self.modelCard = modelCard
         self.verbose = verbose
         self.topK = topK
-        self.showProbabilities = showProbabilities
         self.schemaNode = schemaNode
         self.schemaDetector = JSONSchemaContextDetector(schema: schemaNode)
 
@@ -141,7 +139,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
         tokenizer: TokenizerAdapter,
         jsonSchema: [String: Any],
         modelCard: any ModelCard,
-        verbose: Bool = true,
+        verbose: Bool = false,
         topK: Int = 5,
         showProbabilities: Bool = true
     ) {
@@ -150,7 +148,6 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
         self.modelCard = modelCard
         self.verbose = verbose
         self.topK = topK
-        self.showProbabilities = showProbabilities
         self.schemaDetector = JSONSchemaContextDetector(schema: self.schemaNode)
 
         // ModelCard is now required, no need for isActive flag
@@ -173,14 +170,12 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
         modelCard: any ModelCard,
         verbose: Bool = true,
         topK: Int = 5,
-        showProbabilities: Bool = true
     ) {
         self.tokenizer = tokenizer
         self.schemaNode = schemaNode
         self.modelCard = modelCard
         self.verbose = verbose
         self.topK = topK
-        self.showProbabilities = showProbabilities
         self.schemaDetector = JSONSchemaContextDetector(schema: schemaNode)
 
         // ModelCard is now required, no need for isActive flag
@@ -212,13 +207,8 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
         if verbose {
             print("\n===== 🚀 Generation Started =====")
             // Safely handle prompt tokens - avoid MLX operations in test environment
-            let tokens = try? prompt.asArray(Int32.self)
-            print("Prompt: \(tokens?.count ?? 0) tokens\n")
-
-            if showProbabilities {
-                print("[KeyDetection] JSON key detection enabled")
-                print("[KeyDetection] Will show context-aware key analysis")
-            }
+            let tokens = prompt.asArray(Int32.self)
+            print("Prompt: \(tokens.count) tokens\n")
         }
     }
 
@@ -231,7 +221,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
 
         // Display any pending logit info from previous step
         if let pending = pendingInfo {
-            if verbose && showProbabilities {
+            if verbose {
                 // Context keys are already saved in LogitInfo
                 displayStep(pending, isKey: lastWasInKeyGeneration, contextKeys: [])
             }
@@ -327,7 +317,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
             }
 
             // Show selected token info only for key generation
-            if verbose && showProbabilities && state.jsonExtractor.isInJSON && state.lastWasInKeyGeneration {
+            if verbose && state.jsonExtractor.isInJSON && state.lastWasInKeyGeneration {
                 let displayText = formatTokenForDisplay(text)
                 print("✅ [\(tokenId)] → \"\(displayText)\" 🔑 KEY TOKEN")
   
@@ -366,7 +356,7 @@ public final class KeyDetectionLogitProcessor: LogitProcessor, Sendable {
         }
 
         if let pending = pendingInfo {
-            if verbose && showProbabilities {
+            if verbose {
                 // Context keys are already saved in LogitInfo
                 displayStep(pending, isKey: lastWasInKeyGeneration, contextKeys: [])
             }

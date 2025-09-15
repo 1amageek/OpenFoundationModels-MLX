@@ -106,7 +106,7 @@ final class AdaptiveConstraintEngine: ConstraintEngine, Sendable {
                 tokenizer: tokenizerAdapter,
                 jsonSchema: jsonSchema,  // Pass JSON Schema format
                 modelCard: modelCard,    // Pass modelCard for activation control
-                verbose: true,           // Enable verbose output for key detection
+                verbose: false,           // Enable verbose output for key detection
                 topK: 5,                 // Show top-5 candidates
                 showProbabilities: true  // Show probability distributions
             )
