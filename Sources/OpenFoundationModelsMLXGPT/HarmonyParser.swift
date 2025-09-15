@@ -1,25 +1,26 @@
 import Foundation
+import OpenFoundationModelsMLX
 import RegexBuilder
 import OpenFoundationModelsCore
 
 /// Parser for OpenAI Harmony format output
 /// Handles channel-based output format with analysis, final, and commentary channels
-struct HarmonyParser: Sendable {
-    
+package struct HarmonyParser: Sendable {
+
     /// Parsed Harmony output with separated channels
-    struct ParsedOutput: Sendable {
-        let raw: String
-        let final: String?
-        let analysis: String?
-        let commentary: String?
-        
+    package struct ParsedOutput: Sendable {
+        package let raw: String
+        package let final: String?
+        package let analysis: String?
+        package let commentary: String?
+
         /// Get the display content (final channel or fallback to raw)
-        var displayContent: String {
+        package var displayContent: String {
             final ?? raw
         }
-        
+
         /// Build metadata dictionary for non-final channels
-        func metadata(includeAnalysis: Bool = false) -> [String: Any]? {
+        package func metadata(includeAnalysis: Bool = false) -> [String: Any]? {
             var result: [String: Any] = [:]
             
             if includeAnalysis, let analysis = analysis {
@@ -35,7 +36,7 @@ struct HarmonyParser: Sendable {
     }
     
     /// Parse raw Harmony format output into channels
-    static func parse(_ raw: String) -> ParsedOutput {
+    package static func parse(_ raw: String) -> ParsedOutput {
         var channels: [String: String] = [:]
         
         // Debug logging
@@ -310,13 +311,13 @@ struct HarmonyParser: Sendable {
     }
     
     /// Stream-aware parser state for incremental parsing
-    struct StreamState {
+    package struct StreamState {
         private var buffer: String = ""
         private var inFinalChannel: Bool = false
         private var finalChannelStarted: Bool = false
         
         /// Process a new chunk and return any final channel content to stream
-        mutating func processChunk(_ chunk: String) -> String? {
+        package mutating func processChunk(_ chunk: String) -> String? {
             buffer += chunk
             
             // Check if we've entered the final channel
@@ -358,7 +359,7 @@ struct HarmonyParser: Sendable {
         }
         
         /// Get any remaining buffered content
-        mutating func flush() -> String? {
+        package mutating func flush() -> String? {
             guard !buffer.isEmpty else { return nil }
             let content = buffer
             buffer = ""

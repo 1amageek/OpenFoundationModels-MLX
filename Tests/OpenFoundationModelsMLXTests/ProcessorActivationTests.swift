@@ -3,6 +3,8 @@ import Foundation
 import MLX
 import MLXLMCommon
 @testable import OpenFoundationModelsMLX
+import OpenFoundationModelsMLXGPT
+import OpenFoundationModelsMLXLlama
 
 @Suite("Processor Activation Tests")
 struct ProcessorActivationTests {

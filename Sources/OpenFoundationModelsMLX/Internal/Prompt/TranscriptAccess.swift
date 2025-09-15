@@ -5,23 +5,23 @@ import MLXLMCommon
 
 // Extract information needed for prompt construction from Transcript
 // using strongly-typed access via OpenFoundationModelsExtra.
-enum TranscriptAccess {
+package enum TranscriptAccess {
     /// Simple message representation for internal use
-    struct Message: Sendable {
-        enum Role: String, Sendable { case system, user, assistant, tool }
-        let role: Role
-        let content: String
-        let toolName: String?
+    package struct Message: Sendable {
+        package enum Role: String, Sendable { case system, user, assistant, tool }
+        package let role: Role
+        package let content: String
+        package let toolName: String?
     }
 
-    struct Extracted: Sendable {
-        var systemText: String?
-        var messages: [Message]
-        var schemaJSON: String?
-        var toolDefs: [(name: String, description: String?, parametersJSON: String?)]
+    package struct Extracted: Sendable {
+        package var systemText: String?
+        package var messages: [Message]
+        package var schemaJSON: String?
+        package var toolDefs: [(name: String, description: String?, parametersJSON: String?)]
     }
 
-    static func extract(from transcript: Transcript) -> Extracted {
+    package static func extract(from transcript: Transcript) -> Extracted {
         var out = Extracted(systemText: nil, messages: [], schemaJSON: nil, toolDefs: [])
 
         // 1) system (instructions)

@@ -3,6 +3,9 @@ import OpenFoundationModels
 import OpenFoundationModelsExtra
 import OpenFoundationModelsMacros
 import OpenFoundationModelsMLX
+import OpenFoundationModelsMLXGPT
+import OpenFoundationModelsMLXLlama
+import OpenFoundationModelsMLXUtils
 import MLX
 
 // Simple person profile with nested contact info

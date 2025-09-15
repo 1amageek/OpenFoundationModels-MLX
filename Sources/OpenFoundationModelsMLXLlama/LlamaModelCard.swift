@@ -1,6 +1,7 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
+import OpenFoundationModelsMLX
 import MLXLMCommon
 
 /// ModelCard implementation for Llama 2 format

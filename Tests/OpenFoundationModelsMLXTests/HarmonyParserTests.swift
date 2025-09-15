@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import OpenFoundationModelsMLX
+import OpenFoundationModelsMLXGPT
 
 @Suite("HarmonyParser Tests")
 struct HarmonyParserTests {
