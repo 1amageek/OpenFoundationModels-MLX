@@ -5,9 +5,10 @@ An MLX-backed adapter for [OpenFoundationModels](https://github.com/1amageek/Ope
 ## Features
 
 - **Full LanguageModel Protocol Compatibility**: Drop-in replacement for OpenFoundationModels implementations
-- **TokenTrie-based Schema-Constrained Decoding (SCD)**: Ensures JSON generation strictly adheres to defined schemas at the token level
+- **ADAPT System**: Adaptive Decoding with Advanced Processing Techniques for reliable structured output
+- **Schema-Constrained Generation**: Ensures JSON outputs strictly conform to defined schemas
 - **Local Inference**: Run language models on Apple Silicon using MLX
-- **Structured Output Guarantee**: JSON outputs always conform to specified schemas
+- **Multi-Model Support**: Built-in support for GPT and Llama model families
 - **Tool Call Support**: Automatic detection and parsing of tool/function calls
 - **Streaming Support**: Real-time text generation with AsyncStream
 
@@ -37,7 +38,10 @@ Then add to your target:
     name: "YourTarget",
     dependencies: [
         .product(name: "OpenFoundationModels", package: "OpenFoundationModels"),
-        .product(name: "OpenFoundationModelsMLX", package: "OpenFoundationModels-MLX")
+        .product(name: "OpenFoundationModelsMLX", package: "OpenFoundationModels-MLX"),
+        .product(name: "OpenFoundationModelsMLXGPT", package: "OpenFoundationModels-MLX"),  // For GPT models
+        .product(name: "OpenFoundationModelsMLXLlama", package: "OpenFoundationModels-MLX"), // For Llama models
+        .product(name: "OpenFoundationModelsMLXUtils", package: "OpenFoundationModels-MLX")  // For ModelLoader
     ]
 )
 ```
@@ -49,12 +53,20 @@ Then add to your target:
 ```swift
 import OpenFoundationModels
 import OpenFoundationModelsMLX
+import OpenFoundationModelsMLXGPT
+import OpenFoundationModelsMLXUtils
+
+// Load a GPT model
+let loader = ModelLoader()
+let modelContainer = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
+
+// Create model card for GPT
+let card = GPTOSSModelCard(id: "lmstudio-community/gpt-oss-20b-MLX-8bit")
 
 // Initialize the MLX language model
-let model = MLXLanguageModel(
-    modelName: "llama-3.2-1b-instruct",  // or your preferred model
-    temperature: 0.7,
-    maxTokens: 1000
+let model = try await MLXLanguageModel(
+    modelContainer: modelContainer,
+    card: card
 )
 
 // Create a transcript
@@ -67,7 +79,9 @@ let response = try await model.generate(
     options: nil
 )
 
-print(response.content) // "The capital of France is Paris."
+if case .response(let response) = response {
+    print(response.segments.first?.text?.content ?? "") // "The capital of France is Paris."
+}
 ```
 
 ### Streaming Generation
@@ -75,15 +89,17 @@ print(response.content) // "The capital of France is Paris."
 ```swift
 // Stream responses token by token
 for try await entry in model.stream(transcript: transcript, options: nil) {
-    if case .assistant(let content, _) = entry {
-        print(content, terminator: "") // Print as tokens arrive
+    if case .response(let response) = entry {
+        if let content = response.segments.first?.text?.content {
+            print(content, terminator: "") // Print as tokens arrive
+        }
     }
 }
 ```
 
 ### Schema-Constrained JSON Generation
 
-The key innovation of this library is **TokenTrie-based Schema-Constrained Decoding (SCD)**, which ensures JSON outputs always match your schema:
+The ADAPT system ensures JSON outputs always match your schema through adaptive constraint application:
 
 ```swift
 // Define your schema
@@ -95,7 +111,7 @@ struct PersonSchema: Codable {
 }
 
 // Configure options with schema
-let options = LanguageModelOptions(
+let options = GenerationOptions(
     schema: PersonSchema.self  // Automatically constrains output to match schema
 )
 
@@ -109,7 +125,8 @@ let response = try await model.generate(
 )
 
 // Parse the guaranteed-valid JSON
-if case .assistant(let content, _) = response {
+if case .response(let response) = response,
+   let content = response.segments.first?.text?.content {
     let decoder = JSONDecoder()
     let person = try decoder.decode(PersonSchema.self, from: content.data(using: .utf8)!)
     print("Name: \(person.firstName) \(person.lastName)")
@@ -124,14 +141,20 @@ if case .assistant(let content, _) = response {
 let weatherTool = Tool(
     name: "get_weather",
     description: "Get the current weather for a location",
-    parameters: [
-        "location": "string",
-        "units": "celsius or fahrenheit"
-    ]
+    parametersJSON: """
+    {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"},
+            "units": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+        },
+        "required": ["location"]
+    }
+    """
 )
 
 // Configure with tools
-let options = LanguageModelOptions(
+let options = GenerationOptions(
     tools: [weatherTool]
 )
 
@@ -155,21 +178,28 @@ if case .toolCall(let toolCall) = response {
 ### Advanced Configuration
 
 ```swift
-// Full configuration example
-let model = MLXLanguageModel(
-    modelName: "llama-3.2-3b-instruct",
-    temperature: 0.8,           // Creativity level (0.0-1.0)
-    maxTokens: 2000,            // Maximum response length
-    topP: 0.95,                 // Nucleus sampling
-    topK: 50,                   // Top-K sampling
-    repetitionPenalty: 1.1,     // Reduce repetition
-    seed: 42                    // For reproducible outputs
+// Load model with custom parameters
+let loader = ModelLoader()
+let modelContainer = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
+
+// Create model card with custom parameters
+let card = GPTOSSModelCard(id: "lmstudio-community/gpt-oss-20b-MLX-8bit")
+
+// Add custom logit processors for additional constraints
+let keyDetector = KeyDetectionLogitProcessor(validKeys: ["name", "age", "email"])
+
+// Initialize with additional processors
+let model = try await MLXLanguageModel(
+    modelContainer: modelContainer,
+    card: card,
+    additionalProcessors: [keyDetector]
 )
 
 // Configuration through options
-let options = LanguageModelOptions(
+let options = GenerationOptions(
     maxTokens: 1500,
     temperature: 0.9,
+    topP: 0.95,
     schema: MySchema.self,      // Enable schema constraints
     tools: [myTool1, myTool2]   // Available tools
 )
@@ -185,16 +215,17 @@ if model.supports(locale: .init(identifier: "ja_JP")) {
 }
 ```
 
-## How TokenTrie-based SCD Works
+## How ADAPT Works
 
-Traditional JSON generation often produces invalid syntax or missing fields. Our TokenTrie-based approach solves this by constraining generation at the token level:
+The ADAPT (Adaptive Decoding with Advanced Processing Techniques) system ensures reliable structured output generation:
 
-1. **Schema Analysis**: Extracts all valid key names from your schema
-2. **TokenTrie Construction**: Builds a trie of valid token sequences for keys
-3. **Constrained Generation**: During generation, only allows tokens that form valid keys
-4. **State Machine Validation**: Tracks JSON structure to apply constraints contextually
+1. **Schema Analysis**: Extracts structure and constraints from your Codable types
+2. **Context Detection**: Intelligently detects when JSON generation begins
+3. **Key Validation**: Monitors and validates JSON keys during generation using TokenTrie
+4. **State Machine Tracking**: Maintains JSON structure state for contextual constraints
+5. **Adaptive Constraints**: Applies hard constraints, soft guidance, or observation mode based on context
 
-This ensures 100% schema compliance without post-processing or retries.
+This multi-layered approach ensures schema compliance while maintaining generation flexibility.
 
 ## Building from Source
 
@@ -218,21 +249,34 @@ swift build -c release
 ### Chat Application
 
 ```swift
+import OpenFoundationModels
+import OpenFoundationModelsMLX
+import OpenFoundationModelsMLXGPT
+import OpenFoundationModelsMLXUtils
+
 class ChatSession {
-    let model = MLXLanguageModel(modelName: "llama-3.2-1b-instruct")
+    let model: MLXLanguageModel
     var transcript = Transcript()
-    
+
+    init() async throws {
+        let loader = ModelLoader()
+        let container = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
+        let card = GPTOSSModelCard()
+        self.model = try await MLXLanguageModel(modelContainer: container, card: card)
+    }
+
     func sendMessage(_ message: String) async throws -> String {
         transcript.append(.user(message))
-        
+
         let response = try await model.generate(
             transcript: transcript,
             options: nil
         )
-        
+
         transcript.append(response)
-        
-        if case .assistant(let content, _) = response {
+
+        if case .response(let response) = response,
+           let content = response.segments.first?.text?.content {
             return content
         }
         return ""
@@ -252,28 +296,45 @@ struct ProductReview: Codable {
 }
 
 func extractReview(from text: String) async throws -> ProductReview {
-    let model = MLXLanguageModel(modelName: "llama-3.2-3b-instruct")
-    
+    // Initialize model with GPT
+    let loader = ModelLoader()
+    let container = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
+    let card = GPTOSSModelCard()
+    let model = try await MLXLanguageModel(modelContainer: container, card: card)
+
     var transcript = Transcript()
     transcript.append(.user("""
         Extract structured review data from this text:
         \(text)
     """))
-    
-    let options = LanguageModelOptions(schema: ProductReview.self)
+
+    let options = GenerationOptions(schema: ProductReview.self)
     let response = try await model.generate(transcript: transcript, options: options)
-    
-    if case .assistant(let content, _) = response {
+
+    if case .response(let response) = response,
+       let content = response.segments.first?.text?.content {
         return try JSONDecoder().decode(ProductReview.self, from: content.data(using: .utf8)!)
     }
-    
+
     throw ExtractionError.invalidResponse
 }
 ```
 
+## Supported Models
+
+### GPT Models
+- GPT-OSS models (via GPTOSSModelCard)
+- Support for Harmony format output parsing
+- Channel-aware constraint application
+
+### Llama Models
+- Llama 2 models (via LlamaModelCard)
+- Llama 3.2 models (via Llama3ModelCard)
+- Various quantization formats supported
+
 ## Performance Considerations
 
-- **Model Loading**: First inference is slower due to model loading. Keep models in memory for subsequent calls.
+- **Model Loading**: First inference is slower due to model loading. Use ModelLoader's caching for better performance.
 - **Memory Usage**: Larger models require more RAM. Monitor memory usage with Activity Monitor.
 - **GPU Utilization**: MLX automatically uses Apple Silicon GPU for acceleration.
 - **Batch Processing**: Process multiple requests in parallel for better throughput.
