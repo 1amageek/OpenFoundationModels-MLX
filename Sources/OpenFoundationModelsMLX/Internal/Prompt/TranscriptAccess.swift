@@ -6,9 +6,17 @@ import MLXLMCommon
 // Extract information needed for prompt construction from Transcript
 // using strongly-typed access via OpenFoundationModelsExtra.
 enum TranscriptAccess {
+    /// Simple message representation for internal use
+    struct Message: Sendable {
+        enum Role: String, Sendable { case system, user, assistant, tool }
+        let role: Role
+        let content: String
+        let toolName: String?
+    }
+
     struct Extracted: Sendable {
         var systemText: String?
-        var messages: [ModelCardInput.Message] // Use ModelCardInput.Message directly
+        var messages: [Message]
         var schemaJSON: String?
         var toolDefs: [(name: String, description: String?, parametersJSON: String?)]
     }
@@ -31,12 +39,12 @@ enum TranscriptAccess {
             switch e {
             case .prompt(let p):
                 let text = flattenTextSegments(p.segments)
-                out.messages.append(.init(role: .user, content: text))
+                out.messages.append(.init(role: .user, content: text, toolName: nil))
                 lastPromptRF = p.responseFormat
             case .response(let r):
                 let text = flattenTextSegments(r.segments)
-                if !text.isEmpty { 
-                    out.messages.append(.init(role: .assistant, content: text))
+                if !text.isEmpty {
+                    out.messages.append(.init(role: .assistant, content: text, toolName: nil))
                 }
             default:
                 continue
@@ -68,31 +76,27 @@ enum TranscriptAccess {
 
     private static func schemaJSONString(from responseFormat: Transcript.ResponseFormat?) -> String? {
         guard let responseFormat = responseFormat else { return nil }
-        
-        // ResponseFormat contains a GenerationSchema which is Codable
-        // We need to extract the schema and convert it to JSON string
-        // Since we can't directly access the schema property (it's internal),
-        // we encode the ResponseFormat and extract the schema from JSON
+
+        // Since schema is package-level, we need to use the Transcript encoding workaround
+        // Create a minimal transcript to extract the schema
         do {
-            // Create a temporary transcript with the response format
             let tempPrompt = Transcript.Prompt(
-                segments: [.text(Transcript.TextSegment(content: "temp"))],
+                segments: [],
                 responseFormat: responseFormat
             )
             let tempTranscript = Transcript(entries: [.prompt(tempPrompt)])
-            
-            // Encode to JSON with pretty printing
+
+            // Encode and extract schema
             let encoder = JSONEncoder()
-            encoder.outputFormatting = .prettyPrinted
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let jsonData = try encoder.encode(tempTranscript)
             let jsonObject = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-            
+
             if let entries = jsonObject?["entries"] as? [[String: Any]],
                let firstEntry = entries.first,
                let responseFormatDict = firstEntry["responseFormat"] as? [String: Any],
                let schemaDict = responseFormatDict["schema"] as? [String: Any] {
-                
-                // Convert schema back to JSON string with pretty printing
+
                 let schemaData = try JSONSerialization.data(
                     withJSONObject: schemaDict,
                     options: [.prettyPrinted, .sortedKeys]
@@ -100,10 +104,9 @@ enum TranscriptAccess {
                 return String(data: schemaData, encoding: .utf8)
             }
         } catch {
-            // Failed to extract schema, return nil
             return nil
         }
-        
+
         return nil
     }
 
@@ -121,32 +124,20 @@ enum TranscriptAccess {
         return out
     }
     
-    /// Extract parameters JSON from tool definition via encoding/decoding
+    /// Extract parameters JSON from tool definition
     private static func extractParametersJSON(from toolDef: Transcript.ToolDefinition) -> String? {
+        // ToolDefinition.parameters is a non-optional GenerationSchema (public access)
+        let parameters = toolDef.parameters
+
         do {
-            // Create temporary transcript with instructions containing this tool definition
-            let tempInst = Transcript.Instructions(segments: [], toolDefinitions: [toolDef])
-            let tempTranscript = Transcript(entries: [.instructions(tempInst)])
-            
-            // Encode to JSON and extract parameters
-            let jsonData = try JSONEncoder().encode(tempTranscript)
-            let jsonObject = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-            
-            if let entries = jsonObject?["entries"] as? [[String: Any]],
-               let firstEntry = entries.first,
-               let toolDefinitions = firstEntry["toolDefinitions"] as? [[String: Any]],
-               let firstTool = toolDefinitions.first,
-               let parameters = firstTool["parameters"] {
-                
-                // Convert parameters back to JSON string
-                let paramsData = try JSONSerialization.data(withJSONObject: parameters)
-                return String(data: paramsData, encoding: .utf8)
-            }
+            // Encode the GenerationSchema directly to JSON
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let jsonData = try encoder.encode(parameters)
+            return String(data: jsonData, encoding: .utf8)
         } catch {
-            // Failed to extract parameters, return nil
+            // Failed to encode parameters, return nil
             return nil
         }
-        
-        return nil
     }
 }
