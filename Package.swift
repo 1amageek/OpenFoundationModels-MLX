@@ -34,7 +34,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/OpenFoundationModels", branch: "main"),
+        .package(url: "https://github.com/1amageek/OpenFoundationModels", from: "1.0.0"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", branch: "main"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.1.0"),
     ],

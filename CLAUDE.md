@@ -17,9 +17,6 @@ swift test
 # Run specific test
 swift test --filter TestClassName.testMethodName
 
-# Run the generable test CLI tool
-swift run generable-test-cli
-
 # Clean build artifacts
 swift package clean
 ```
@@ -85,6 +82,7 @@ Tests are organized by component in `Tests/OpenFoundationModelsMLXTests/`:
 - Unit tests for tokenizer and parser components
 - Integration tests for model card functionality
 - HarmonyParser tests for GPT-OSS output format
+- FunctionGemma parser tests
 
 ## Model Support
 
@@ -99,11 +97,10 @@ Model cards define model-specific configurations and are organized by model fami
 
 **Gemma Models** (in `OpenFoundationModelsMLXGemma`):
 - `FunctionGemmaModelCard`: Configuration for FunctionGemma models
-  - Default: `mlx-community/functiongemma-270m-it-bf16` (MLX形式)
+  - Default: `mlx-community/functiongemma-270m-it-bf16`
   - Specialized for function calling
   - Uses `<start_function_call>call:name{params}<end_function_call>` output format
   - Supports automatic tool call detection and parsing
-  - **⚠️ 現在動作不可**: FunctionGemmaは `Gemma3ForCausalLM` アーキテクチャを使用。mlx-swiftは Gemma2 までのサポートで、Gemma3 は未サポート。mlx-swiftにGemma3サポートが追加されるまで使用不可。
 
 Each card specifies tokenizer requirements, special tokens, and model-specific generation parameters.
 
@@ -144,7 +141,7 @@ The project uses Swift's `package` access control for internal components that n
 - `HarmonyParser`: GPT-specific output parser (package-level in GPT library)
 
 ### Dependencies
-- MLX Swift (via mlx-swift-examples): Core ML framework for Apple Silicon
+- mlx-swift-lm: MLX language model library for Apple Silicon
 - swift-transformers: Tokenization support from Hugging Face
 - OpenFoundationModels: Base protocol definitions
 

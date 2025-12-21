@@ -5,18 +5,17 @@ An MLX-backed adapter for [OpenFoundationModels](https://github.com/1amageek/Ope
 ## Features
 
 - **Full LanguageModel Protocol Compatibility**: Drop-in replacement for OpenFoundationModels implementations
-- **ADAPT System**: Adaptive Decoding with Advanced Processing Techniques for reliable structured output
-- **Schema-Constrained Generation**: Ensures JSON outputs strictly conform to defined schemas
 - **Local Inference**: Run language models on Apple Silicon using MLX
-- **Multi-Model Support**: Built-in support for GPT and Llama model families
+- **Multi-Model Support**: Built-in support for GPT, Llama, and Gemma model families
 - **Tool Call Support**: Automatic detection and parsing of tool/function calls
 - **Streaming Support**: Real-time text generation with AsyncStream
 
 ## Requirements
 
-- macOS 14.0+ (Sonoma or later)
+- macOS 15.0+ (Sequoia or later)
+- iOS 18.0+
 - Swift 6.2+ (Xcode 16.x or later)
-- Apple Silicon Mac (M1/M2/M3)
+- Apple Silicon Mac (M1/M2/M3/M4)
 
 ## Installation
 
@@ -26,8 +25,8 @@ Add the following to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/1amageek/OpenFoundationModels-MLX.git", from: "1.0.0"),
-    .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.0.0")
+    .package(url: "https://github.com/1amageek/OpenFoundationModels-MLX.git", branch: "main"),
+    .package(url: "https://github.com/1amageek/OpenFoundationModels.git", branch: "main")
 ]
 ```
 
@@ -39,8 +38,9 @@ Then add to your target:
     dependencies: [
         .product(name: "OpenFoundationModels", package: "OpenFoundationModels"),
         .product(name: "OpenFoundationModelsMLX", package: "OpenFoundationModels-MLX"),
-        .product(name: "OpenFoundationModelsMLXGPT", package: "OpenFoundationModels-MLX"),  // For GPT models
+        .product(name: "OpenFoundationModelsMLXGPT", package: "OpenFoundationModels-MLX"),   // For GPT models
         .product(name: "OpenFoundationModelsMLXLlama", package: "OpenFoundationModels-MLX"), // For Llama models
+        .product(name: "OpenFoundationModelsMLXGemma", package: "OpenFoundationModels-MLX"), // For Gemma models
         .product(name: "OpenFoundationModelsMLXUtils", package: "OpenFoundationModels-MLX")  // For ModelLoader
     ]
 )
@@ -53,15 +53,15 @@ Then add to your target:
 ```swift
 import OpenFoundationModels
 import OpenFoundationModelsMLX
-import OpenFoundationModelsMLXGPT
+import OpenFoundationModelsMLXLlama
 import OpenFoundationModelsMLXUtils
 
-// Load a GPT model
+// Load a Llama model
 let loader = ModelLoader()
-let modelContainer = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
+let modelContainer = try await loader.loadModel("mlx-community/Llama-3.2-1B-Instruct-4bit")
 
-// Create model card for GPT
-let card = GPTOSSModelCard(id: "lmstudio-community/gpt-oss-20b-MLX-8bit")
+// Create model card for Llama 3.2
+let card = Llama3ModelCard(id: "mlx-community/Llama-3.2-1B-Instruct-4bit")
 
 // Initialize the MLX language model
 let model = try await MLXLanguageModel(
@@ -80,7 +80,7 @@ let response = try await model.generate(
 )
 
 if case .response(let response) = response {
-    print(response.segments.first?.text?.content ?? "") // "The capital of France is Paris."
+    print(response.segments.first?.text?.content ?? "")
 }
 ```
 
@@ -91,47 +91,49 @@ if case .response(let response) = response {
 for try await entry in model.stream(transcript: transcript, options: nil) {
     if case .response(let response) = entry {
         if let content = response.segments.first?.text?.content {
-            print(content, terminator: "") // Print as tokens arrive
+            print(content, terminator: "")
         }
     }
 }
 ```
 
-### Schema-Constrained JSON Generation
-
-The ADAPT system ensures JSON outputs always match your schema through adaptive constraint application:
+### Using GPT Models
 
 ```swift
-// Define your schema
-struct PersonSchema: Codable {
-    let firstName: String
-    let lastName: String
-    let age: Int
-    let email: String?
-}
+import OpenFoundationModelsMLXGPT
 
-// Configure options with schema
-let options = GenerationOptions(
-    schema: PersonSchema.self  // Automatically constrains output to match schema
+// Load a GPT model
+let loader = ModelLoader()
+let modelContainer = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
+
+// Create model card for GPT-OSS
+let card = GPTOSSModelCard(id: "lmstudio-community/gpt-oss-20b-MLX-8bit")
+
+let model = try await MLXLanguageModel(
+    modelContainer: modelContainer,
+    card: card
+)
+```
+
+### Using FunctionGemma for Tool Calling
+
+```swift
+import OpenFoundationModelsMLXGemma
+
+// Load FunctionGemma model
+let loader = ModelLoader()
+let modelContainer = try await loader.loadModel("mlx-community/functiongemma-270m-it-bf16")
+
+// Create model card for FunctionGemma
+let card = FunctionGemmaModelCard()
+
+let model = try await MLXLanguageModel(
+    modelContainer: modelContainer,
+    card: card
 )
 
-// Add user message requesting structured data
-transcript.append(.user("Generate information for a software engineer named John."))
-
-// Generate with schema constraints
-let response = try await model.generate(
-    transcript: transcript,
-    options: options
-)
-
-// Parse the guaranteed-valid JSON
-if case .response(let response) = response,
-   let content = response.segments.first?.text?.content {
-    let decoder = JSONDecoder()
-    let person = try decoder.decode(PersonSchema.self, from: content.data(using: .utf8)!)
-    print("Name: \(person.firstName) \(person.lastName)")
-    print("Age: \(person.age)")
-}
+// FunctionGemma is optimized for function calling
+// Output format: <start_function_call>call:function_name{params}<end_function_call>
 ```
 
 ### Tool/Function Calling
@@ -171,61 +173,8 @@ let response = try await model.generate(
 if case .toolCall(let toolCall) = response {
     print("Tool: \(toolCall.name)")
     print("Arguments: \(toolCall.arguments)")
-    // Execute tool and continue conversation...
 }
 ```
-
-### Advanced Configuration
-
-```swift
-// Load model with custom parameters
-let loader = ModelLoader()
-let modelContainer = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
-
-// Create model card with custom parameters
-let card = GPTOSSModelCard(id: "lmstudio-community/gpt-oss-20b-MLX-8bit")
-
-// Add custom logit processors for additional constraints
-let keyDetector = KeyDetectionLogitProcessor(validKeys: ["name", "age", "email"])
-
-// Initialize with additional processors
-let model = try await MLXLanguageModel(
-    modelContainer: modelContainer,
-    card: card,
-    additionalProcessors: [keyDetector]
-)
-
-// Configuration through options
-let options = GenerationOptions(
-    maxTokens: 1500,
-    temperature: 0.9,
-    topP: 0.95,
-    schema: MySchema.self,      // Enable schema constraints
-    tools: [myTool1, myTool2]   // Available tools
-)
-
-// Check model availability
-if model.isAvailable {
-    print("Model loaded and ready")
-}
-
-// Check locale support
-if model.supports(locale: .init(identifier: "ja_JP")) {
-    print("Model supports Japanese")
-}
-```
-
-## How ADAPT Works
-
-The ADAPT (Adaptive Decoding with Advanced Processing Techniques) system ensures reliable structured output generation:
-
-1. **Schema Analysis**: Extracts structure and constraints from your Codable types
-2. **Context Detection**: Intelligently detects when JSON generation begins
-3. **Key Validation**: Monitors and validates JSON keys during generation using TokenTrie
-4. **State Machine Tracking**: Maintains JSON structure state for contextual constraints
-5. **Adaptive Constraints**: Applies hard constraints, soft guidance, or observation mode based on context
-
-This multi-layered approach ensures schema compliance while maintaining generation flexibility.
 
 ## Building from Source
 
@@ -244,100 +193,38 @@ swift test
 swift build -c release
 ```
 
-## Examples
+## Package Structure
 
-### Chat Application
+The project is organized into multiple libraries:
 
-```swift
-import OpenFoundationModels
-import OpenFoundationModelsMLX
-import OpenFoundationModelsMLXGPT
-import OpenFoundationModelsMLXUtils
-
-class ChatSession {
-    let model: MLXLanguageModel
-    var transcript = Transcript()
-
-    init() async throws {
-        let loader = ModelLoader()
-        let container = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
-        let card = GPTOSSModelCard()
-        self.model = try await MLXLanguageModel(modelContainer: container, card: card)
-    }
-
-    func sendMessage(_ message: String) async throws -> String {
-        transcript.append(.user(message))
-
-        let response = try await model.generate(
-            transcript: transcript,
-            options: nil
-        )
-
-        transcript.append(response)
-
-        if case .response(let response) = response,
-           let content = response.segments.first?.text?.content {
-            return content
-        }
-        return ""
-    }
-}
-```
-
-### Structured Data Extraction
-
-```swift
-struct ProductReview: Codable {
-    let productName: String
-    let rating: Int  // 1-5
-    let pros: [String]
-    let cons: [String]
-    let recommendation: Bool
-}
-
-func extractReview(from text: String) async throws -> ProductReview {
-    // Initialize model with GPT
-    let loader = ModelLoader()
-    let container = try await loader.loadModel("lmstudio-community/gpt-oss-20b-MLX-8bit")
-    let card = GPTOSSModelCard()
-    let model = try await MLXLanguageModel(modelContainer: container, card: card)
-
-    var transcript = Transcript()
-    transcript.append(.user("""
-        Extract structured review data from this text:
-        \(text)
-    """))
-
-    let options = GenerationOptions(schema: ProductReview.self)
-    let response = try await model.generate(transcript: transcript, options: options)
-
-    if case .response(let response) = response,
-       let content = response.segments.first?.text?.content {
-        return try JSONDecoder().decode(ProductReview.self, from: content.data(using: .utf8)!)
-    }
-
-    throw ExtractionError.invalidResponse
-}
-```
+| Library | Description |
+|---------|-------------|
+| `OpenFoundationModelsMLX` | Core MLX adapter implementing LanguageModel protocol |
+| `OpenFoundationModelsMLXGPT` | GPT model cards and HarmonyParser |
+| `OpenFoundationModelsMLXLlama` | Llama 2 and Llama 3.2 model cards |
+| `OpenFoundationModelsMLXGemma` | FunctionGemma model cards |
+| `OpenFoundationModelsMLXUtils` | ModelLoader and shared utilities |
 
 ## Supported Models
 
 ### GPT Models
-- GPT-OSS models (via GPTOSSModelCard)
+- GPT-OSS models (via `GPTOSSModelCard`)
 - Support for Harmony format output parsing
-- Channel-aware constraint application
 
 ### Llama Models
-- Llama 2 models (via LlamaModelCard)
-- Llama 3.2 models (via Llama3ModelCard)
+- Llama 2 models (via `LlamaModelCard`)
+- Llama 3.2 models (via `Llama3ModelCard`)
 - Various quantization formats supported
+
+### Gemma Models
+- FunctionGemma (via `FunctionGemmaModelCard`)
+- Optimized for function/tool calling
 
 ## Performance Considerations
 
 - **Model Loading**: First inference is slower due to model loading. Use ModelLoader's caching for better performance.
 - **Memory Usage**: Larger models require more RAM. Monitor memory usage with Activity Monitor.
 - **GPU Utilization**: MLX automatically uses Apple Silicon GPU for acceleration.
-- **Batch Processing**: Process multiple requests in parallel for better throughput.
 
 ## Troubleshooting
 
@@ -346,15 +233,10 @@ func extractReview(from text: String) async throws -> ProductReview {
 - Check internet connection for initial model fetch
 - Verify model name is correct
 
-### Schema Constraints Not Working
-- Check that your schema is Codable-compliant
-- Verify JSON key names are valid identifiers
-- Ensure the model supports structured generation
-
 ### Memory Issues
 - Use smaller models for development/testing
 - Implement proper model lifecycle management
-- Consider quantized model variants
+- Consider quantized model variants (4bit, 8bit)
 
 ## Contributing
 
@@ -364,6 +246,7 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 - [OpenFoundationModels](https://github.com/1amageek/OpenFoundationModels) - The base framework providing the LanguageModel protocol
 - [MLX Swift](https://github.com/ml-explore/mlx-swift) - Apple's machine learning framework for Apple Silicon
+- [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) - MLX language model library
 
 ## License
 

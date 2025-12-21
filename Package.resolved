@@ -1,5 +1,5 @@
 {
-  "originHash" : "309577c4e52f5b50d5010f9733b63ad89ec4e3507bb24b4ce57145cf3829c052",
+  "originHash" : "d9829a8667597f6b6bec7b923f76f95f36e22416c9e1860aaf3a3433bff60467",
   "pins" : [
     {
       "identity" : "mlx-swift",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/OpenFoundationModels",
       "state" : {
-        "branch" : "main",
-        "revision" : "c0ec944c7eb8f8db9f53c4f728c869b2522cd714"
+        "revision" : "b473875608da5bf948aa2c8d07fbe3b6c7c4ccd7",
+        "version" : "1.0.0"
       }
     },
     {
