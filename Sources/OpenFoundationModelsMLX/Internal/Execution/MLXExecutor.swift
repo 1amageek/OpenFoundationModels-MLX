@@ -71,8 +71,11 @@ public actor MLXExecutor {
         Logger.info("================== PROMPT END ====================")
         
         return try await container.perform { (context: ModelContext) async throws -> String in
-            let userInput = UserInput(prompt: .text(prompt))
-            let input = try await context.processor.prepare(input: userInput)
+            // Directly encode the pre-formatted prompt without applying chat template
+            // This is critical because our ModelCard.prompt() already formats the prompt
+            // and applying the chat template again would cause Jinja parsing errors
+            let tokens = context.tokenizer.encode(text: prompt)
+            let input = LMInput(tokens: MLXArray(tokens.map { Int32($0) }))
             
             if let processor = logitProcessor {
                 let sampler = parameters.sampler()
@@ -144,8 +147,11 @@ public actor MLXExecutor {
                     try await container.perform { (context: ModelContext) async throws in
                         try Task.checkCancellation()
                         Logger.debug("[MLXExecutor] Starting stream processing")
-                        let userInput = UserInput(prompt: .text(prompt))
-                        let input = try await context.processor.prepare(input: userInput)
+                        // Directly encode the pre-formatted prompt without applying chat template
+                        // This is critical because our ModelCard.prompt() already formats the prompt
+                        // and applying the chat template again would cause Jinja parsing errors
+                        let tokens = context.tokenizer.encode(text: prompt)
+                        let input = LMInput(tokens: MLXArray(tokens.map { Int32($0) }))
                         
                         let stream: AsyncThrowingStream<Generation, Error>
                         

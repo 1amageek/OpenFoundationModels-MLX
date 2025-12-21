@@ -32,7 +32,6 @@ The project is organized into multiple libraries for better modularity:
 
 **OpenFoundationModelsMLX** (Core)
 - Core MLX adapter implementing Apple's LanguageModel protocol
-- ADAPT system for constraint-based generation
 - Internal utilities with `package` visibility for cross-library use
 - Located in `Sources/OpenFoundationModelsMLX/`
 
@@ -46,6 +45,12 @@ The project is organized into multiple libraries for better modularity:
 - Support for various Llama format variations
 - Located in `Sources/OpenFoundationModelsMLXLlama/`
 
+**OpenFoundationModelsMLXGemma**
+- FunctionGemmaModelCard for Google's FunctionGemma models
+- FunctionGemmaParser for parsing function call output format
+- Specialized for function calling with `<start_function_call>` format
+- Located in `Sources/OpenFoundationModelsMLXGemma/`
+
 **OpenFoundationModelsMLXUtils**
 - ModelLoader for downloading and caching models from Hugging Face
 - Shared utilities independent of specific model types
@@ -57,20 +62,8 @@ The project is organized into multiple libraries for better modularity:
 
 **MLXLanguageModel**: The main adapter implementing Apple's LanguageModel protocol, located in `Sources/OpenFoundationModelsMLX/Adapter/`. Provides drop-in compatibility with OpenFoundationModels.
 
-**ADAPT System** (Adaptive Decoding with Advanced Processing Techniques): Located in `Internal/ADAPT/`, this includes:
-- `KeyDetectionLogitProcessor`: Monitors and validates JSON key generation with schema awareness
-- `JSONExtractor`: Extracts valid JSON from model outputs
-- `JSONSchemaContextDetector`: Detects JSON generation context for constraint application
-- `JSONStateMachine`: Tracks JSON structure state during generation
-
-**Constraint System**: Located in `Internal/Constraints/`:
-- `ConstraintEngine`: Protocol defining constraint application strategies
-- `AdaptiveConstraintEngine`: Implements adaptive, context-aware constraints
-- `JSONSchemaExtractor`: Extracts schemas from Codable types
-- `SchemaNode`: Represents JSON schema structure for validation
-
 **Generation Pipeline**: Located in `Internal/Pipeline/`:
-- `GenerationPipeline`: Orchestrates the complete generation flow with constraints
+- `GenerationPipeline`: Orchestrates the generation flow
 - `GenerationOrchestrator`: Manages high-level generation coordination
 
 **MLX Integration**: Located in `Internal/Engine/` and `Internal/Execution/`:
@@ -79,21 +72,19 @@ The project is organized into multiple libraries for better modularity:
 
 ### Key Design Patterns
 
-**TokenTrie-based Schema-Constrained Decoding (SCD)**: The system builds tries of valid token sequences from JSON schemas and constrains generation at the token level to guarantee schema compliance.
+**ModelCard Protocol**: Each model family implements a ModelCard that defines:
+- Prompt formatting specific to the model
+- Output parsing and processing
+- Default generation parameters
 
-**LogitProcessor Chain**: Multiple processors can be chained to apply different constraints (schema validation, key detection, tool detection) during generation.
-
-**Adaptive Constraint Modes**: Supports three modes:
-- Hard constraints: Strict token-level enforcement
-- Soft constraints: Schema guidance via prompting
-- Observation mode: Monitoring without interference
+**Streaming Support**: Both `generate()` and `stream()` methods are supported for synchronous and streaming generation.
 
 ## Testing Strategy
 
 Tests are organized by component in `Tests/OpenFoundationModelsMLXTests/`:
-- Unit tests for individual components (e.g., `KeyDetectionLogitProcessorTests`)
-- Integration tests for end-to-end scenarios (e.g., `KeyDetectionIntegrationTest`)
-- Schema extraction and validation tests (e.g., `SchemaOutputTest`)
+- Unit tests for tokenizer and parser components
+- Integration tests for model card functionality
+- HarmonyParser tests for GPT-OSS output format
 
 ## Model Support
 
@@ -106,6 +97,14 @@ Model cards define model-specific configurations and are organized by model fami
 - `LlamaModelCard`: Configuration for Llama 2 models
 - `Llama3ModelCard`: Configuration for Llama 3.2 models
 
+**Gemma Models** (in `OpenFoundationModelsMLXGemma`):
+- `FunctionGemmaModelCard`: Configuration for FunctionGemma models
+  - Default: `mlx-community/functiongemma-270m-it-bf16` (MLX形式)
+  - Specialized for function calling
+  - Uses `<start_function_call>call:name{params}<end_function_call>` output format
+  - Supports automatic tool call detection and parsing
+  - **⚠️ 現在動作不可**: FunctionGemmaは `Gemma3ForCausalLM` アーキテクチャを使用。mlx-swiftは Gemma2 までのサポートで、Gemma3 は未サポート。mlx-swiftにGemma3サポートが追加されるまで使用不可。
+
 Each card specifies tokenizer requirements, special tokens, and model-specific generation parameters.
 
 ## Development Notes
@@ -114,8 +113,9 @@ Each card specifies tokenizer requirements, special tokens, and model-specific g
 
 ```swift
 import OpenFoundationModelsMLX
-import OpenFoundationModelsMLXGPT  // For GPT models
+import OpenFoundationModelsMLXGPT   // For GPT models
 import OpenFoundationModelsMLXLlama // For Llama models
+import OpenFoundationModelsMLXGemma // For Gemma models
 import OpenFoundationModelsMLXUtils // For ModelLoader
 
 // Load a model
@@ -126,6 +126,8 @@ let container = try await loader.loadModel("model-id")
 let card = GPTOSSModelCard(id: "model-id")
 // or
 let card = Llama3ModelCard(id: "model-id")
+// or
+let card = FunctionGemmaModelCard()  // Uses default: mlx-community/functiongemma-270m-it-bf16
 
 // Initialize the language model
 let model = try await MLXLanguageModel(
@@ -149,4 +151,14 @@ The project uses Swift's `package` access control for internal components that n
 ### Performance Considerations
 - Models are cached after first load for faster subsequent inference
 - Token generation uses MLX's GPU acceleration on Apple Silicon
-- Constraint application is optimized to minimize overhead during generation
+
+### Swift Executable Entry Points
+
+**`@main` を使用する場合、ファイル名を `main.swift` 以外にすること**
+
+`main.swift` はSwiftが自動的にトップレベルコードとして扱うため、`@main` 属性と競合する。
+
+```
+❌ main.swift + @main → コンパイルエラー
+✅ App.swift + @main  → OK
+```

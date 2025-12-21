@@ -1,7 +1,6 @@
 import Foundation
-import MLX
-import MLXLMCommon
 import OpenFoundationModels
+import MLXLMCommon
 @testable import OpenFoundationModelsMLX
 
 // MARK: - Mock Tokenizer Implementations
@@ -107,83 +106,6 @@ public class ConfigurableTokenizer: TokenizerAdapter, @unchecked Sendable {
 // MARK: - Common Test Schemas
 
 public enum TestSchemas {
-    /// CompanyProfile schema used in multiple tests
-    nonisolated(unsafe) public static let companyProfileSchema: [String: Any] = [
-        "type": "object",
-        "properties": [
-            "name": ["type": "string"],
-            "founded": ["type": "integer"],
-            "type": [
-                "type": "string",
-                "enum": ["startup", "corporation", "nonprofit"]
-            ],
-            "employeeCount": ["type": "integer"],
-            "headquarters": [
-                "type": "object",
-                "properties": [
-                    "street": ["type": "string"],
-                    "city": ["type": "string"],
-                    "country": ["type": "string"],
-                    "postalCode": ["type": "string"]
-                ]
-            ],
-            "departments": [
-                "type": "array",
-                "items": [
-                    "type": "object",
-                    "properties": [
-                        "name": ["type": "string"],
-                        "type": [
-                            "type": "string",
-                            "enum": ["engineering", "sales", "marketing", "operations"]
-                        ],
-                        "headCount": ["type": "integer"],
-                        "manager": [
-                            "type": "object",
-                            "properties": [
-                                "firstName": ["type": "string"],
-                                "lastName": ["type": "string"],
-                                "email": ["type": "string"],
-                                "level": [
-                                    "type": "string",
-                                    "enum": ["junior", "senior", "lead", "manager"]
-                                ],
-                                "yearsExperience": ["type": "integer"]
-                            ]
-                        ],
-                        "projects": [
-                            "type": "array",
-                            "items": [
-                                "type": "object",
-                                "properties": [
-                                    "name": ["type": "string"],
-                                    "status": [
-                                        "type": "string",
-                                        "enum": ["planning", "active", "completed", "onHold"]
-                                    ],
-                                    "startDate": ["type": "string"],
-                                    "teamSize": ["type": "integer"],
-                                    "budget": ["type": ["number", "null"]]
-                                ]
-                            ]
-                        ]
-                    ]
-                ]
-            ]
-        ]
-    ]
-
-    /// Nested schemas for CompanyProfile
-    public static let companyProfileNestedSchemas = [
-        "headquarters": ["city", "country", "postalCode", "street"],
-        "departments[]": ["headCount", "manager", "name", "projects", "type"],
-        "departments[].manager": ["email", "firstName", "lastName", "level", "yearsExperience"],
-        "departments[].projects[]": ["budget", "name", "startDate", "status", "teamSize"]
-    ]
-
-    /// Root keys for CompanyProfile
-    public static let companyProfileRootKeys = ["departments", "employeeCount", "founded", "headquarters", "name", "type"]
-
     /// Simple user schema
     nonisolated(unsafe) public static let userSchema: [String: Any] = [
         "type": "object",
@@ -206,47 +128,14 @@ public enum TestSchemas {
     ]
 }
 
-// MARK: - Test Helper Functions
-
-/// Helper to create a test KeyDetectionProcessor with exposed internal state
-public final class TestKeyDetectionProcessor {
-    private let tokenizer: TokenizerAdapter
-    private let schemaDetector: JSONSchemaContextDetector?
-    private var generatedText = ""
-
-    public init(tokenizer: TokenizerAdapter, jsonSchema: [String: Any]? = nil) {
-        self.tokenizer = tokenizer
-        self.schemaDetector = jsonSchema != nil ? JSONSchemaContextDetector(schema: jsonSchema!) : nil
-    }
-
-    public func simulateGeneration(_ text: String) {
-        generatedText = text
-    }
-
-    public func getCurrentAvailableKeys() -> [String] {
-        guard let detector = schemaDetector else { return [] }
-        let partialJSON = extractPartialJSON()
-        return detector.getAvailableKeys(from: partialJSON)
-    }
-
-    private func extractPartialJSON() -> String {
-        if let jsonStart = generatedText.firstIndex(of: "{") {
-            return String(generatedText[jsonStart...])
-        }
-        return ""
-    }
-}
-
 // MARK: - Mock ModelCard
 
 /// Simple mock ModelCard for testing
 public struct MockModelCard: ModelCard {
     public let id: String
-    public let alwaysActivate: Bool
 
-    public init(id: String = "mock-model", alwaysActivate: Bool = true) {
+    public init(id: String = "mock-model") {
         self.id = id
-        self.alwaysActivate = alwaysActivate
     }
 
     public var params: GenerateParameters {
@@ -255,32 +144,5 @@ public struct MockModelCard: ModelCard {
 
     public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
         return Prompt("Test prompt")
-    }
-
-    public func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool {
-        return alwaysActivate
-    }
-}
-
-// MARK: - Mock LogitProcessor
-
-public final class MockLogitProcessor: LogitProcessor, @unchecked Sendable {
-    public var promptCalled = false
-    public var processCalled = false
-    public var didSampleCalled = false
-
-    public init() {}
-
-    public func prompt(_ prompt: MLXArray) {
-        promptCalled = true
-    }
-
-    public func process(logits: MLXArray) -> MLXArray {
-        processCalled = true
-        return logits
-    }
-
-    public func didSample(token: MLXArray) {
-        didSampleCalled = true
     }
 }

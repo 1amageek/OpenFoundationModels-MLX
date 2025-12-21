@@ -7,20 +7,20 @@ import OpenFoundationModels
 public protocol ModelCard: Identifiable, Sendable where ID == String {
     /// Backend model identifier (e.g., Hugging Face repo id or local id).
     var id: String { get }
-    
+
     /// Generate prompt from transcript and options using OpenFoundationModels' PromptBuilder
     func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt
-    
+
     /// Default generation parameters for this model (used as-is; no fallback/merge in MLX layer).
     var params: GenerateParameters { get }
-    
+
     /// Process generated text output and create a Transcript.Entry
     /// - Parameters:
     ///   - raw: The raw generated text from the model
     ///   - options: Generation options that might affect output processing
     /// - Returns: A Transcript.Entry with processed content
     func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry
-    
+
     /// Process streaming output chunks into Transcript.Entry stream
     /// - Parameters:
     ///   - chunks: Raw text chunks from the model stream
@@ -30,13 +30,6 @@ public protocol ModelCard: Identifiable, Sendable where ID == String {
         from chunks: AsyncThrowingStream<String, Error>,
         options: GenerationOptions?
     ) -> AsyncThrowingStream<Transcript.Entry, Error>
-    
-    /// Determine if a LogitProcessor should be active based on generated text
-    /// - Parameters:
-    ///   - raw: The generated text so far
-    ///   - processor: The LogitProcessor to check
-    /// - Returns: Whether the processor should be active
-    func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool
 }
 
 // Default implementations
@@ -45,7 +38,7 @@ extension ModelCard {
     public func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry {
         return .response(.init(assetIDs: [], segments: [.text(.init(content: raw))]))
     }
-    
+
     /// Default implementation: streams raw chunks as assistant responses
     public func stream(
         from chunks: AsyncThrowingStream<String, Error>,
@@ -67,10 +60,5 @@ extension ModelCard {
                 }
             }
         }
-    }
-    
-    /// Default implementation: always activate processors
-    public func shouldActivateProcessor(_ raw: String, processor: any LogitProcessor) -> Bool {
-        return true
     }
 }
