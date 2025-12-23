@@ -6,6 +6,14 @@ import MLXLMCommon
 
 /// ModelCard implementation for Google's FunctionGemma models
 /// Specialized for function calling with structured output format
+///
+/// FunctionGemma uses specific control tokens:
+/// - `<start_function_declaration>` / `<end_function_declaration>` for tool definitions
+/// - `<start_function_call>` / `<end_function_call>` for model's tool requests
+/// - `<start_function_response>` / `<end_function_response>` for tool results
+/// - `<escape>` token wraps all string values
+///
+/// Reference: https://ai.google.dev/gemma/docs/functiongemma/formatting-and-best-practices
 public struct FunctionGemmaModelCard: ModelCard {
     public let id: String
 
@@ -15,7 +23,7 @@ public struct FunctionGemmaModelCard: ModelCard {
 
     public var params: GenerateParameters {
         GenerateParameters(
-            maxTokens: 128,
+            maxTokens: 256,
             temperature: 0.7,
             topP: 0.9
         )
@@ -31,52 +39,28 @@ public struct FunctionGemmaModelCard: ModelCard {
         ]
     }
 
+    // MARK: - Prompt Generation
+
     public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
         let ext = TranscriptAccess.extract(from: transcript)
         let messages = ext.messages.filter { $0.role != .system }
 
         return Prompt {
-            // Developer turn - system instructions and tool definitions
-            "<start_of_turn>user\n"
+            // Developer turn - required system message and function declarations
+            "<start_of_turn>developer\n"
 
-            // System instructions
+            // Required system message for function calling capability
+            "You are a model that can do function calling with the following functions"
+
+            // Function declarations using FunctionGemma format
+            for tool in ext.toolDefs {
+                formatFunctionDeclaration(tool)
+            }
+
+            // Additional system instructions
             if let system = ext.systemText {
+                "\n\n"
                 system
-                "\n\n"
-            }
-
-            // Tool definitions in JSON Schema format (FunctionGemma spec)
-            if !ext.toolDefs.isEmpty {
-                "You have access to the following tools:\n\n"
-
-                for tool in ext.toolDefs {
-                    // Format as JSON Schema (FunctionGemma expected format)
-                    "{\n"
-                    "  \"type\": \"function\",\n"
-                    "  \"function\": {\n"
-                    "    \"name\": \"\(tool.name)\""
-
-                    if let description = tool.description {
-                        ",\n    \"description\": \"\(escapeJSON(description))\""
-                    }
-
-                    if let parametersJSON = tool.parametersJSON {
-                        ",\n    \"parameters\": \(parametersJSON)"
-                    }
-
-                    "\n  }\n"
-                    "}\n\n"
-                }
-
-                "When you need to call a function, respond with:\n"
-                "<start_function_call>call:function_name{param:<escape>value<escape>}<end_function_call>\n\n"
-            }
-
-            // Response schema (if provided)
-            if let schemaJSON = ext.schemaJSON {
-                "You must respond with JSON matching this schema:\n"
-                schemaJSON
-                "\n\n"
             }
 
             "<end_of_turn>\n"
@@ -95,13 +79,10 @@ public struct FunctionGemmaModelCard: ModelCard {
                     "<end_of_turn>\n"
 
                 case .tool:
-                    // Tool results go in user turn
-                    "<start_of_turn>user\n"
+                    // Tool results use function response format
                     if let toolName = message.toolName {
-                        "[Result from \(toolName)]: "
+                        formatFunctionResponse(toolName: toolName, result: message.content)
                     }
-                    message.content
-                    "<end_of_turn>\n"
 
                 default:
                     ""
@@ -113,14 +94,67 @@ public struct FunctionGemmaModelCard: ModelCard {
         }
     }
 
-    /// Escape special characters for JSON string
-    private func escapeJSON(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\t", with: "\\t")
+    // MARK: - Function Declaration Formatting
+
+    /// Format a tool definition using FunctionGemma's declaration syntax
+    /// Format: <start_function_declaration>declaration:NAME{description:<escape>DESC<escape>,parameters:{...}}<end_function_declaration>
+    private func formatFunctionDeclaration(_ tool: (name: String, description: String?, parametersJSON: String?)) -> String {
+        var declaration = "<start_function_declaration>declaration:\(tool.name){"
+
+        // Description
+        if let description = tool.description {
+            declaration += "description:<escape>\(description)<escape>"
+        }
+
+        // Parameters
+        if let parametersJSON = tool.parametersJSON {
+            if tool.description != nil {
+                declaration += ","
+            }
+            // Convert JSON to FunctionGemma format (escape string values)
+            let formattedParams = formatParametersForGemma(parametersJSON)
+            declaration += "parameters:\(formattedParams)"
+        } else {
+            // Empty parameters
+            if tool.description != nil {
+                declaration += ","
+            }
+            declaration += "parameters:{properties:{},required:[],type:<escape>object<escape>}"
+        }
+
+        declaration += "}<end_function_declaration>"
+        return declaration
+    }
+
+    /// Convert JSON parameters to FunctionGemma format
+    /// Wraps string values with <escape> tokens
+    private func formatParametersForGemma(_ json: String) -> String {
+        // Parse and reformat the JSON with escape tokens
+        // For simplicity, we pass through as-is but wrap the type field
+        // A more complete implementation would parse and transform the entire structure
+        var result = json
+            .replacingOccurrences(of: "\"type\":", with: "type:")
+            .replacingOccurrences(of: "\"object\"", with: "<escape>object<escape>")
+            .replacingOccurrences(of: "\"string\"", with: "<escape>string<escape>")
+            .replacingOccurrences(of: "\"number\"", with: "<escape>number<escape>")
+            .replacingOccurrences(of: "\"integer\"", with: "<escape>integer<escape>")
+            .replacingOccurrences(of: "\"boolean\"", with: "<escape>boolean<escape>")
+            .replacingOccurrences(of: "\"array\"", with: "<escape>array<escape>")
+
+        // Handle description fields
+        result = result.replacingOccurrences(of: "\"description\":", with: "description:")
+
+        // Handle properties and required
+        result = result.replacingOccurrences(of: "\"properties\":", with: "properties:")
+        result = result.replacingOccurrences(of: "\"required\":", with: "required:")
+
+        return result
+    }
+
+    /// Format a function response for tool results
+    /// Format: <start_function_response>response:NAME{result:<escape>VALUE<escape>}<end_function_response>
+    private func formatFunctionResponse(toolName: String, result: String) -> String {
+        return "<start_function_response>response:\(toolName){result:<escape>\(result)<escape>}<end_function_response>\n"
     }
 
     // MARK: - Output Processing
@@ -129,7 +163,6 @@ public struct FunctionGemmaModelCard: ModelCard {
     public func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry {
         // Check for function call
         if let functionCall = FunctionGemmaParser.parseFunctionCall(raw) {
-            // Create ToolCall with proper API
             if let toolCallsEntry = createToolCallsEntry(from: functionCall) {
                 return toolCallsEntry
             }
@@ -142,9 +175,7 @@ public struct FunctionGemmaModelCard: ModelCard {
 
         // Remove incomplete <start_function_call> tokens (not followed by <end_function_call>)
         if let range = cleaned.range(of: "<start_function_call>") {
-            // Check if there's a complete function call
             if !cleaned.contains("<end_function_call>") {
-                // Truncate at the start of incomplete function call
                 cleaned = String(cleaned[..<range.lowerBound])
             }
         }
@@ -152,6 +183,10 @@ public struct FunctionGemmaModelCard: ModelCard {
         // Remove any remaining special tokens
         cleaned = cleaned
             .replacingOccurrences(of: "<escape>", with: "")
+            .replacingOccurrences(of: "<start_function_declaration>", with: "")
+            .replacingOccurrences(of: "<end_function_declaration>", with: "")
+            .replacingOccurrences(of: "<start_function_response>", with: "")
+            .replacingOccurrences(of: "<end_function_response>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         return .response(.init(
