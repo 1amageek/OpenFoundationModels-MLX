@@ -77,6 +77,8 @@ public actor MLXExecutor {
             let tokens = context.tokenizer.encode(text: prompt)
             let input = LMInput(tokens: MLXArray(tokens.map { Int32($0) }))
             
+            let baseStream: AsyncStream<Generation>
+
             if let processor = logitProcessor {
                 let sampler = parameters.sampler()
                 let iterator = try TokenIterator(
@@ -88,34 +90,31 @@ public actor MLXExecutor {
                     prefillStepSize: parameters.prefillStepSize,
                     maxTokens: parameters.maxTokens
                 )
-                
-                let baseStream = MLXLMCommon.generate(
+
+                baseStream = MLXLMCommon.generate(
                     input: input,
                     context: context,
                     iterator: iterator
                 )
-                
-                var result = ""
-                for await generation in baseStream {
-                    switch generation {
-                    case .chunk(let text):
-                        result += text
-                    case .info, .toolCall:
-                        break
-                    }
-                }
-                return result
             } else {
-                let output = try MLXLMCommon.generate(
+                // Use new AsyncStream-based API
+                baseStream = try MLXLMCommon.generate(
                     input: input,
                     parameters: parameters,
-                    context: context,
-                    didGenerate: { (tokens: [Int]) in
-                        return .more
-                    }
+                    context: context
                 )
-                return output.output
             }
+
+            var result = ""
+            for await generation in baseStream {
+                switch generation {
+                case .chunk(let text):
+                    result += text
+                case .info, .toolCall:
+                    break
+                }
+            }
+            return result
         }
     }
     

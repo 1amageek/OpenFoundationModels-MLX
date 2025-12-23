@@ -27,11 +27,11 @@ enum OptionsMapper {
         // Priority: GenerationOptions > ModelCard params > nil
         let fallbackTemp: Double? = modelCard != nil ? Double(modelCard!.params.temperature) : nil
         let fallbackTopP: Double? = modelCard != nil ? Double(modelCard!.params.topP) : nil
-        
+
         var sampling = SamplingParameters(
             temperature: options.temperature ?? fallbackTemp,
-            topP: nil,  // Will be set based on sampling mode if available
-            topK: nil,  // Will be set based on sampling mode if available  
+            topP: fallbackTopP,  // Use ModelCard's topP as fallback
+            topK: nil,  // Will be set based on sampling mode if available
             maxTokens: options.maximumResponseTokens ?? modelCard?.params.maxTokens,
             stop: nil,  // GenerationOptions doesn't expose stop sequences
             seed: nil  // Will be set based on sampling mode if available
