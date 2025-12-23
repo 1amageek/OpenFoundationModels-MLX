@@ -21,41 +21,54 @@ public struct FunctionGemmaModelCard: ModelCard {
         )
     }
 
+    /// Stop tokens for FunctionGemma
+    /// Generation should stop when any of these tokens are produced
+    public var stopTokens: Set<String> {
+        [
+            "<end_function_call>",  // End of function call
+            "<end_of_turn>",        // End of model turn
+            "<eos>"                 // End of sequence
+        ]
+    }
+
     public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
         let ext = TranscriptAccess.extract(from: transcript)
         let messages = ext.messages.filter { $0.role != .system }
 
         return Prompt {
-            // Developer role (system message) - required for function calling
+            // Developer turn - system instructions and tool definitions
             "<start_of_turn>user\n"
 
             // System instructions
             if let system = ext.systemText {
                 system
                 "\n\n"
-            } else {
-                "You are a helpful assistant that can call functions.\n\n"
             }
 
-            // Tool definitions
+            // Tool definitions in JSON Schema format (FunctionGemma spec)
             if !ext.toolDefs.isEmpty {
-                "You have access to the following functions:\n\n"
+                "You have access to the following tools:\n\n"
 
                 for tool in ext.toolDefs {
-                    "Function: \(tool.name)\n"
+                    // Format as JSON Schema (FunctionGemma expected format)
+                    "{\n"
+                    "  \"type\": \"function\",\n"
+                    "  \"function\": {\n"
+                    "    \"name\": \"\(tool.name)\""
 
                     if let description = tool.description {
-                        "Description: \(description)\n"
+                        ",\n    \"description\": \"\(escapeJSON(description))\""
                     }
 
                     if let parametersJSON = tool.parametersJSON {
-                        "Parameters: \(parametersJSON)\n"
+                        ",\n    \"parameters\": \(parametersJSON)"
                     }
 
-                    "\n"
+                    "\n  }\n"
+                    "}\n\n"
                 }
 
-                "To call a function, use this format:\n"
+                "When you need to call a function, respond with:\n"
                 "<start_function_call>call:function_name{param:<escape>value<escape>}<end_function_call>\n\n"
             }
 
@@ -66,35 +79,48 @@ public struct FunctionGemmaModelCard: ModelCard {
                 "\n\n"
             }
 
-            // User messages
+            "<end_of_turn>\n"
+
+            // Conversation history
             for message in messages {
                 switch message.role {
                 case .user:
+                    "<start_of_turn>user\n"
                     message.content
-                    "\n"
+                    "<end_of_turn>\n"
 
                 case .assistant:
-                    "<end_of_turn>\n"
                     "<start_of_turn>model\n"
                     message.content
                     "<end_of_turn>\n"
-                    "<start_of_turn>user\n"
 
                 case .tool:
+                    // Tool results go in user turn
+                    "<start_of_turn>user\n"
                     if let toolName = message.toolName {
-                        "[Function result from \(toolName)]: "
+                        "[Result from \(toolName)]: "
                     }
                     message.content
-                    "\n"
+                    "<end_of_turn>\n"
 
                 default:
                     ""
                 }
             }
 
-            "<end_of_turn>\n"
+            // Generation prompt
             "<start_of_turn>model\n"
         }
+    }
+
+    /// Escape special characters for JSON string
+    private func escapeJSON(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     // MARK: - Output Processing
@@ -109,10 +135,23 @@ public struct FunctionGemmaModelCard: ModelCard {
             }
         }
 
-        // Clean up output (remove end tokens)
-        let cleaned = raw
+        // Clean up output (remove end tokens and incomplete function call tokens)
+        var cleaned = raw
             .replacingOccurrences(of: "<end_of_turn>", with: "")
             .replacingOccurrences(of: "<eos>", with: "")
+
+        // Remove incomplete <start_function_call> tokens (not followed by <end_function_call>)
+        if let range = cleaned.range(of: "<start_function_call>") {
+            // Check if there's a complete function call
+            if !cleaned.contains("<end_function_call>") {
+                // Truncate at the start of incomplete function call
+                cleaned = String(cleaned[..<range.lowerBound])
+            }
+        }
+
+        // Remove any remaining special tokens
+        cleaned = cleaned
+            .replacingOccurrences(of: "<escape>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         return .response(.init(
@@ -129,6 +168,7 @@ public struct FunctionGemmaModelCard: ModelCard {
         return AsyncThrowingStream { continuation in
             Task {
                 var buffer = ""
+                var pendingFunctionCall = false
 
                 do {
                     for try await chunk in chunks {
@@ -144,12 +184,23 @@ public struct FunctionGemmaModelCard: ModelCard {
                             }
                         }
 
+                        // Check if we're in the middle of a function call
+                        if buffer.contains("<start_function_call>") {
+                            pendingFunctionCall = true
+                        }
+
+                        // Don't stream if we're building a function call
+                        if pendingFunctionCall {
+                            continue
+                        }
+
                         // Stream text content (filtering out special tokens)
                         let cleanChunk = chunk
                             .replacingOccurrences(of: "<end_of_turn>", with: "")
                             .replacingOccurrences(of: "<eos>", with: "")
+                            .replacingOccurrences(of: "<escape>", with: "")
 
-                        if !cleanChunk.isEmpty && !cleanChunk.hasPrefix("<start_function_call>") {
+                        if !cleanChunk.isEmpty {
                             continuation.yield(.response(.init(
                                 assetIDs: [],
                                 segments: [.text(.init(content: cleanChunk))]
@@ -161,6 +212,26 @@ public struct FunctionGemmaModelCard: ModelCard {
                     if let functionCall = FunctionGemmaParser.parseFunctionCall(buffer),
                        let toolCallsEntry = createToolCallsEntry(from: functionCall) {
                         continuation.yield(toolCallsEntry)
+                    } else if pendingFunctionCall {
+                        // Incomplete function call - extract text before it
+                        var cleaned = buffer
+                            .replacingOccurrences(of: "<end_of_turn>", with: "")
+                            .replacingOccurrences(of: "<eos>", with: "")
+
+                        if let range = cleaned.range(of: "<start_function_call>") {
+                            cleaned = String(cleaned[..<range.lowerBound])
+                        }
+
+                        cleaned = cleaned
+                            .replacingOccurrences(of: "<escape>", with: "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                        if !cleaned.isEmpty {
+                            continuation.yield(.response(.init(
+                                assetIDs: [],
+                                segments: [.text(.init(content: cleaned))]
+                            )))
+                        }
                     }
 
                     continuation.finish()

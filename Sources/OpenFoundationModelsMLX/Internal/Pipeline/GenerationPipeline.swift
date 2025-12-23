@@ -31,8 +31,26 @@ struct GenerationPipeline: Sendable {
                 logitProcessor: nil
             )
 
+            // Get stop tokens from ModelCard
+            let stopTokens = modelCard?.stopTokens ?? []
+
             for try await chunk in stream {
                 raw += chunk
+
+                // Check for stop tokens
+                if !stopTokens.isEmpty {
+                    for stopToken in stopTokens {
+                        if raw.contains(stopToken) {
+                            Logger.info("[GenerationPipeline] Stop token detected: \(stopToken)")
+                            // Truncate at stop token if needed (keep the stop token for parsing)
+                            break
+                        }
+                    }
+                    // If we found any stop token, break out of the loop
+                    if stopTokens.contains(where: { raw.contains($0) }) {
+                        break
+                    }
+                }
             }
 
             // Log the generated output
@@ -81,7 +99,7 @@ struct GenerationPipeline: Sendable {
             Task {
                 do {
                     // ModelCard is required for proper output processing
-                    guard modelCard != nil else {
+                    guard let card = modelCard else {
                         throw GenerationPipelineError.missingModelCard
                     }
 
@@ -91,8 +109,21 @@ struct GenerationPipeline: Sendable {
                         logitProcessor: nil
                     )
 
+                    // Get stop tokens from ModelCard
+                    let stopTokens = card.stopTokens
+                    var buffer = ""
+
                     for try await chunk in baseStream {
+                        buffer += chunk
                         continuation.yield(chunk)
+
+                        // Check for stop tokens
+                        if !stopTokens.isEmpty {
+                            if stopTokens.contains(where: { buffer.contains($0) }) {
+                                Logger.info("[GenerationPipeline] Stream: Stop token detected")
+                                break
+                            }
+                        }
                     }
 
                     continuation.finish()

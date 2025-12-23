@@ -14,6 +14,11 @@ public protocol ModelCard: Identifiable, Sendable where ID == String {
     /// Default generation parameters for this model (used as-is; no fallback/merge in MLX layer).
     var params: GenerateParameters { get }
 
+    /// Stop tokens that should terminate generation.
+    /// These are string tokens that, when generated, should cause the model to stop.
+    /// Examples: "<end_of_turn>", "<eos>", "<end_function_call>"
+    var stopTokens: Set<String> { get }
+
     /// Process generated text output and create a Transcript.Entry
     /// - Parameters:
     ///   - raw: The raw generated text from the model
@@ -34,6 +39,9 @@ public protocol ModelCard: Identifiable, Sendable where ID == String {
 
 // Default implementations
 extension ModelCard {
+    /// Default implementation: no additional stop tokens
+    public var stopTokens: Set<String> { [] }
+
     /// Default implementation: returns raw text as assistant entry
     public func generate(from raw: String, options: GenerationOptions?) -> Transcript.Entry {
         return .response(.init(assetIDs: [], segments: [.text(.init(content: raw))]))
