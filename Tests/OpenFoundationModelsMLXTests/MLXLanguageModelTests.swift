@@ -68,8 +68,8 @@ struct MLXLanguageModelTests {
         ])
         
         let prompt = card.prompt(transcript: transcript, options: nil)
-        #expect(prompt.description.contains("System: You are a helpful assistant"))
-        #expect(prompt.description.contains("user: Hello"))
+        #expect(prompt._content.contains("System: You are a helpful assistant"))
+        #expect(prompt._content.contains("user: Hello"))
     }
     
     // MARK: - Prompt Rendering Tests
@@ -101,7 +101,7 @@ struct MLXLanguageModelTests {
         let prompt = card.prompt(transcript: transcript, options: nil)
         // MockModelCard adds a newline after each message, but the last message doesn't get a newline
         // because it's not included in the messages (it's the current prompt)
-        #expect(prompt.description == "System: Be concise\nuser: What is 2+2?\nassistant: 4\nuser: And 3+3?")
+        #expect(prompt._content == "System: Be concise\nuser: What is 2+2?\nassistant: 4\nuser: And 3+3?")
     }
     
     @Test("Prompt rendering without system message")
@@ -121,7 +121,7 @@ struct MLXLanguageModelTests {
         
         let prompt = card.prompt(transcript: transcript, options: nil)
         // MockModelCard adds a newline after each message in the transcript
-        #expect(prompt.description == "user: Hello\nassistant: Hi there!")
+        #expect(prompt._content == "user: Hello\nassistant: Hi there!")
     }
     
     @Test("Prompt rendering with tools")
@@ -142,8 +142,8 @@ struct MLXLanguageModelTests {
         ])
         
         let prompt = card.prompt(transcript: transcript, options: nil)
-        #expect(prompt.description.contains("System: Use tools when needed"))
-        #expect(prompt.description.contains("user: What's the weather?"))
+        #expect(prompt._content.contains("System: Use tools when needed"))
+        #expect(prompt._content.contains("user: What's the weather?"))
         // Note: Tool rendering depends on ModelCard implementation
     }
     

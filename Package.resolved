@@ -1,13 +1,13 @@
 {
-  "originHash" : "d9829a8667597f6b6bec7b923f76f95f36e22416c9e1860aaf3a3433bff60467",
+  "originHash" : "be3979bab36c8a2d9aaf95667307f724046a4921f37059763d77b6428f9498f9",
   "pins" : [
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
-        "revision" : "072b684acaae80b6a463abab3a103732f33774bf",
-        "version" : "0.29.1"
+        "revision" : "4dccaeda1d83cf8697f235d2786c2d72ad4bb925",
+        "version" : "0.30.3"
       }
     },
     {
@@ -16,7 +16,7 @@
       "location" : "https://github.com/ml-explore/mlx-swift-lm.git",
       "state" : {
         "branch" : "main",
-        "revision" : "d9f46e3a1fe715d01304372089aba5f39c585327"
+        "revision" : "2c700546340c37f275d23302163701b77c4dcbd9"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/OpenFoundationModels",
       "state" : {
-        "revision" : "b473875608da5bf948aa2c8d07fbe3b6c7c4ccd7",
-        "version" : "1.0.0"
+        "revision" : "7eab4bb3ece0297ad031f9dc9a5c140357083c0b",
+        "version" : "1.1.2"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-jinja.git",
       "state" : {
-        "revision" : "06a511d5adab5a812852ff972e65702a24b8ce30",
-        "version" : "2.2.0"
+        "revision" : "d81197f35f41445bc10e94600795e68c6f5e94b0",
+        "version" : "2.3.1"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax.git",
       "state" : {
-        "revision" : "0687f71944021d616d34d922343dcef086855920",
-        "version" : "600.0.1"
+        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
+        "version" : "602.0.0"
       }
     },
     {
@@ -78,8 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-transformers",
       "state" : {
-        "branch" : "573e5c9",
-        "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0"
+        "revision" : "573e5c9036c2f136b3a8a071da8e8907322403d0",
+        "version" : "1.1.6"
       }
     }
   ],

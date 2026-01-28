@@ -44,22 +44,33 @@ public struct FunctionGemmaModelCard: ModelCard {
     public func prompt(transcript: Transcript, options: GenerationOptions?) -> Prompt {
         let ext = TranscriptAccess.extract(from: transcript)
         let messages = ext.messages.filter { $0.role != .system }
+        let hasTools = !ext.toolDefs.isEmpty
+
+        // Debug: Log tool count
+        print("[FunctionGemmaModelCard] Tool definitions count: \(ext.toolDefs.count)")
+        if hasTools {
+            print("[FunctionGemmaModelCard] Tool names: \(ext.toolDefs.map { $0.name }.joined(separator: ", "))")
+        }
 
         return Prompt {
             // Developer turn - required system message and function declarations
             "<start_of_turn>developer\n"
 
-            // Required system message for function calling capability
-            "You are a model that can do function calling with the following functions"
+            // Only include function calling preamble if tools are available
+            if hasTools {
+                "You are a model that can do function calling with the following functions"
 
-            // Function declarations using FunctionGemma format
-            for tool in ext.toolDefs {
-                formatFunctionDeclaration(tool)
+                // Function declarations using FunctionGemma format
+                for tool in ext.toolDefs {
+                    formatFunctionDeclaration(tool)
+                }
             }
 
-            // Additional system instructions
+            // System instructions
             if let system = ext.systemText {
-                "\n\n"
+                if hasTools {
+                    "\n\n"
+                }
                 system
             }
 

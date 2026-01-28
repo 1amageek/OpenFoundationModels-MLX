@@ -50,7 +50,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         do {
             // Generate raw text through backend
             let raw = try await backend.orchestratedGenerate(
-                prompt: prompt.description,
+                prompt: prompt._content,
                 sampling: sampling,
                 modelCard: card
             )
@@ -100,7 +100,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
 
                     // Get raw stream from backend
                     let rawStream = await backend.orchestratedStream(
-                        prompt: prompt.description,
+                        prompt: prompt._content,
                         sampling: sampling,
                         modelCard: card
                     )
